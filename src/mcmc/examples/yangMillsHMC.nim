@@ -1,4 +1,4 @@
-import ../abstractFieldTheory
+import ../LatticeFieldTheory
 
 qexInit()
 

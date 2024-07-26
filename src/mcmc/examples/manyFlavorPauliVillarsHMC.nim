@@ -1,4 +1,4 @@
-import ../abstractFieldTheory
+import ../LatticeFieldTheory
 
 qexInit()
 
@@ -21,9 +21,9 @@ var
     "integrator": "MN2"
   }
   matterActionParams = %* {
+    "boundary-conditions": "aaaa",
     "smearing": "nHYP",
-    "smearing-coefficients": @[0.4, 0.5, 0.5],
-    "boundary-conditions": "aaaa"
+    "smearing-coefficients": @[0.4, 0.5, 0.5]
   }
   fermionParams = %* {
     "mass": 0.0,
@@ -35,7 +35,7 @@ var
     "steps": 5,
     "integrator": "MN2"
   }
-  ntrajs = 500
+  ntrajs = 100
   ns = 2 # Number of staggered fermions (nf = 4*ns)
   nspv = 8 # Number of staggered Pauli-Villars bosons
 
@@ -47,23 +47,21 @@ fieldTheory.setGaugeAction(gaugeActionParams)
 
 # Add matter action w/ Nf = 8 (2 stag. fields) & 8 Pauli-Villars per fermion
 fieldTheory.addMatterAction(matterActionParams, name = "PauliVillarsAction")
-fieldTheory.addStaggeredFermion(fermionParams, ns): "PauliVillarsAction"
-fieldTheory.addStaggeredBoson(bosonParams, nspv): "PauliVillarsAction"
+fieldTheory.addStaggeredFermion fermionParams, ns: "PauliVillarsAction"
+fieldTheory.addStaggeredBoson bosonParams, nspv: "PauliVillarsAction"
 
 # Compile action
 fieldTheory.compile
-  
+
 # Run Hamiltonian Monte Carlo
 for traj in 0..<ntrajs:
   fieldTheory.hamiltonian(heatbath = true)
   fieldTheory.evolve
   fieldTheory.hamiltonian
-  let
-    acc = fieldTheory.metropolis
-    dH = fieldTheory.hf["hamiltonian"] - fieldTheory.hi["hamiltonian"]
-  echo traj, " ", acc, " ", dH
+  discard fieldTheory.metropolis
+
   #if step == int(nsteps/2):
-  #  fieldTheory.write("test")
-  #  fieldTheory.read("test")
+    # fieldTheory.write("manyFlavorPauliVillars")
+    # fieldTheory.read("test")
 
 qexFinalize()
