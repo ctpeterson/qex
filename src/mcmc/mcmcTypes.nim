@@ -748,7 +748,7 @@ proc prepHMC(self: LatticeSubAction; tau: float; pRNG: ParallelRNG) =
     new(self.f)
     new(self.u)
     for saIdx in 0..<self.subActions.len: # Sub-sub-actions are nested
-      self.subActions[saIdx].prepHMC(self.dtau, self.pRNG[])
+      self.subActions[saIdx].prepHMC(tau,self.pRNG[])
 
 proc setReferences(
     self: LatticeFieldTheory; 

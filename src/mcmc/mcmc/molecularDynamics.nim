@@ -18,7 +18,7 @@ proc getStep*[A](self: A; step: int): seq[float] =
     if (sAction.running) and (sAction.iStep == step):
         result.add sAction.absCumSum/sAction.absScale
 
-proc setStep*[A](self: A; step: int; minabsdt: float): float =
+proc setStep*[A](self: A; step: int; minabsdt, scale: float): float =
   result = 0.0
   for sAction in self.subActions:
     case sAction.running:
@@ -34,8 +34,8 @@ proc setStep*[A](self: A; step: int; minabsdt: float): float =
           sAction.absCumSum += abs(sAction.updates[sAction.timeStep].dtau)
           sAction.iStep += 1
           
-          sAction.vdtau = sAction.updates[sAction.spaceStep].dtau
-          result = sAction.cumSum
+          sAction.vdtau = sAction.updates[sAction.spaceStep].dtau*scale
+          result = sAction.cumSum*scale
           if sAction.iStep == sAction.steps*nMD: sAction.running = false
         else: sAction.vdtau = 0.0
       of false: sAction.vdtau = 0.0
@@ -208,7 +208,14 @@ proc getMatterForce(
     f.projectTrclssAntiHrm(u)
     p.updateMomentum(f)
 
-proc updateGauge[A](actions: seq[A]; dtau: float; u: auto; f: auto; p: auto) =
+proc mdStep[A](
+    actions: seq[A]; 
+    dtau: float; 
+    u: auto; 
+    f: auto; 
+    p: auto
+  ) =
+  # Gauge field update
   var nested = false
   for action in actions:
     for sAction in action.subActions:
@@ -219,81 +226,77 @@ proc updateGauge[A](actions: seq[A]; dtau: float; u: auto; f: auto; p: auto) =
       for action in actions:
         for sAction in action.subActions:
           if not sAction.solo:
-            if sAction.includeInStep: subActions.add sAction
-      if subActions.len > 0: 
-        subActions.trajectory(0.5*dtau, u, f, p, type(subActions[0]))
-        for sAction in subActions: sAction.includeInStep = false
-      else: u.updateGauge(p, dtau)
-    of false: u.updateGauge(p, dtau)
+            if sAction.includeInStep: 
+              subActions.add sAction
+              sAction.includeInStep = false
+      case subActions.len > 0:
+        of true: subActions.trajectory(u,f,p,type(subActions[0]),scale=dtau)
+        of false: u.updateGauge(p,dtau)
+    of false: u.updateGauge(p,dtau)
+
+  # Momentum update
+  for action in actions:
+    case action.action:
+      of PureGauge: discard
+      of GaugeMatter, PureMatter:
+        action.smear.rephased = false
+        action.smear.smeared = false
+  for action in actions:
+    case action.action:
+      of PureGauge, GaugeMatter: action.getGaugeForce(f,p)
+      of PureMatter: discard
+  actions.getMatterForce(u,f,p)
 
 template trajectory*[A](
     actions: seq[A]; 
-    odtau: float; 
     u: auto;
     f: auto;
     p: auto;
-    a: typedesc[A]
+    a: typedesc[A];
+    scale: float = 1.0
   ): untyped =
   var 
     step = 0
+    nFields = 0
+
     pTime = 0.0
     cTime = 0.0
+
     pdtau = 0.0
-    nFields = 0
     tdtau = 0.0
-    itn = 0
     dtau = 0.0
 
-  for action in actions:
-    nFields += action.subActions.len
+    minabsdt = Large64
+    nNext = 0
+    nRunning = 0
+    
+    updateSpace = false
 
-  proc updateMomentum {.gensym.} =
-    for action in actions:
-      case action.action:
-        of PureGauge: discard
-        of GaugeMatter, PureMatter:
-          action.smear.rephased = false
-          action.smear.smeared = false
-    for action in actions:
-      case action.action:
-        of PureGauge, GaugeMatter: 
-            action.getGaugeForce(f,p)
-        of PureMatter: discard
-    actions.getMatterForce(u,f,p)
+  for action in actions: nFields += action.subActions.len
 
   while true:
-    var 
-      minabsdt = Large64
-      nNext = 0
-      nRunning = 0
-      updateSpace = false
+    minabsdt = Large64
+    nNext = 0
+    nRunning = 0
+    updateSpace = false
 
     for action in actions:
       let absdts = action.getStep(step)
       for absdt in absdts:
         if absdt <= minabsdt: minabsdt = absdt
-    for action in actions: cTime = action.setStep(step, minabsdt)
+    for action in actions: cTime = action.setStep(step, minabsdt, scale)
     tdtau = cTime - pTime + pdtau
-    pTime = cTime
 
-    for action in actions:
-      nNext += action.getNumNext(step)
+    for action in actions: nNext += action.getNumNext(step)
     if nNext == nFields: step += 1
 
-    for action in actions:
-      nRunning += action.getNumRunning
+    for action in actions: nRunning += action.getNumRunning
 
     for action in actions:
       for sAction in action.subActions:
         if abs(sAction.vdtau) > Small64: updateSpace = true
-    
-    if (itn == 0) or (nRunning == 0): tdtau += odtau
 
-    if (updateSpace) or (nRunning == 0):
-      actions.updateGauge(tdtau, u, f, p)
-      updateMomentum()
-      pdtau = 0.0
-    else: pdtau = tdtau
+    if (updateSpace) or (nRunning == 0): actions.mdStep(tdtau, u, f, p)
 
     if nRunning == 0:
       for action in actions:
@@ -305,3 +308,8 @@ template trajectory*[A](
           sAction.cumSum = 0.0
           sAction.absCumSum = 0.0
       break
+    else:
+      pdtau = case updateSpace
+        of true: 0.0
+        of false: tdtau 
+      pTime = cTime

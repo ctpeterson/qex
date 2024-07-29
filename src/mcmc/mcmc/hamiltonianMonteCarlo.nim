@@ -31,7 +31,7 @@ template runHamiltonianMonteCarlo*(
       result += action.getAction
 
   proc trajectory {.gensym.} =
-    self.actions.trajectory(0.0, self.u[], self.f, self.p, type(self.actions[0]))
+    self.actions.trajectory(self.u[], self.f, self.p, type(self.actions[0]))
 
   proc metropolis(hi,hf: float): bool {.gensym.} =
     result = false
@@ -89,7 +89,7 @@ if isMainModule:
   qexInit()
 
   var
-    ftInfo = %* {
+    fieldTheoryInfo = %* {
       "lattice-geometry": @[4,4,4,4],
       "mpi-geometry": @[1,1,1,1],
       "monte-carlo-algorithm": "hmc",
@@ -100,43 +100,43 @@ if isMainModule:
       "parallel-random-number-generator": "milc",
       "start": "cold"
     }
-    aInfo = %* {
+    actionInfo = %* {
       "smearing": "nhyp",
       "smearing-coefficients": @[0.4,0.5,0.5],
       "boundary-conditions": "aaaa"
     }
-    gInfo = %* {
+    gaugeFieldInfo = %* {
       "action": "Wilson",
       "beta": 9.0,
       "steps": 10,
       "integrator": "2MN"
     }
-    fInfo = %* {
+    fermionFieldInfo = %* {
       "mass": 0.0,
       "integrator": "2MN",
       "steps": 10
     }
-    bInfo = %* {
+    bosonFieldInfo = %* {
       "mass": 0.75,
       "integrator": "2MN",
       "steps": 10
     }
-    sbInfo = %* {
+    subBosonFieldInfo = %* {
       "mass": 0.75,
       "integrator": "2MN",
       "steps": 2
     }
 
-  var hmc = newLatticeFieldTheory(ftInfo):
-    fieldTheory.addGaugeAction(gInfo)
-    fieldTheory.addMatterAction(aInfo):
-      action.addStaggeredFermion(fInfo)
-      action.addStaggeredBoson(bInfo)
-  #      subAction.addStaggeredBoson(sbInfo) # Nested
-  #      subAction.addStaggeredBoson(sbInfo) # Nested
+  var hmc = newLatticeFieldTheory(fieldTheoryInfo):
+    fieldTheory.addGaugeAction(gaugeFieldInfo)
+    fieldTheory.addMatterAction(actionInfo):
+      action.addStaggeredFermion(fermionFieldInfo)
+      action.addStaggeredBoson(bosonFieldInfo):
+        subAction.addStaggeredBoson(subBosonFieldInfo) # Nested
+        subAction.addStaggeredBoson(subBosonFieldInfo) # Nested
 
-  hmc.runHamiltonianMonteCarlo(2):
-    echo sample, " ", accepted, " ", hf-hi
+  hmc.runHamiltonianMonteCarlo(10):
+    echo sample, " ", accepted, " ", hf-hi, " ", hi, " ", hf
     plaquette(u)
     polyakov(u)
 
