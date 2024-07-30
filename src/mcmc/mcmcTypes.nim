@@ -82,7 +82,7 @@ type
   MonteCarloAtom[S] {.inheritable.} = object
     case algorithm*: MonteCarloAlgorithm
       of HamiltonianMonteCarlo:
-          timeStep*, spaceStep*, iStep*,steps*: int
+          timeStep*,spaceStep*,iStep*,steps*: int
           running*: bool
           dtau*,vdtau*,absScale*,cumSum*,absCumSum*: float
           updates*: seq[MolecularDynamicsUpdate]
@@ -714,12 +714,12 @@ proc initGaugeField(self: var LatticeFieldTheory) =
       of PureGauge: discard
       of GaugeMatter,PureMatter: action.smear.u[] = self.u[]
 
-proc prepHMC(self: LatticeSubAction; tau: float; pRNG: ParallelRNG) =
+proc prepHMC(self: LatticeSubAction; pRNG: ParallelRNG) =
   self.running = true
   self.timeStep = 0
   self.spaceStep = 0
   self.iStep = 0
-  self.dtau = tau / float(self.steps)
+  self.dtau = 1.0 / float(self.steps)
   self.absScale = 0.0
 
   for step in 0..<self.steps:
@@ -728,6 +728,9 @@ proc prepHMC(self: LatticeSubAction; tau: float; pRNG: ParallelRNG) =
         of UpdateT: 
           if step == 0: 
             self.updates[mdIdx].dtau = self.updates[mdIdx].scale*self.dtau
+            if mdIdx == 0:
+              self.cumSum = self.updates[mdIdx].dtau
+              self.absCumSum = abs(self.cumSum)
           self.absScale += abs(self.updates[mdIdx].dtau) 
         of UpdateV: discard
         of UpdateVTV: discard
@@ -738,9 +741,7 @@ proc prepHMC(self: LatticeSubAction; tau: float; pRNG: ParallelRNG) =
       of UpdateV: 
         self.updates[mdIdx].dtau = self.updates[mdIdx].scale*self.dtau
       of UpdateVTV: discard
-
-  self.cumSum = 0.0
-  self.absCumSum = 0.0
+  
   self.pRNG[] = pRNG
 
   if not self.solo:
@@ -748,7 +749,7 @@ proc prepHMC(self: LatticeSubAction; tau: float; pRNG: ParallelRNG) =
     new(self.f)
     new(self.u)
     for saIdx in 0..<self.subActions.len: # Sub-sub-actions are nested
-      self.subActions[saIdx].prepHMC(tau,self.pRNG[])
+      self.subActions[saIdx].prepHMC(self.pRNG[])
 
 proc setReferences(
     self: LatticeFieldTheory; 
@@ -771,7 +772,7 @@ proc prepHMC(self: var LatticeFieldTheory) =
     nested = false
   for action in self.actions:
     for sAction in action.subActions: 
-      sAction.prepHMC(self.tau, self.pRNG)
+      sAction.prepHMC(self.pRNG)
       nFields += 1
       if not sAction.solo: 
         self.setReferences(sAction, self.u[])
@@ -819,11 +820,6 @@ proc newLatticeFieldTheory[L:static[int],S,T,U,V,W,X](
       var
         sSeed,pSeed: uint64
         sGen,pGen: string
-
-      case info.hasKey("trajectory-length"):
-        of true: result.tau = info["trajectory-length"].getFloat()
-        of false: qexError "Must specify trajectory length"
-      stream.add "  trajectory length = " & $(result.tau)
 
       result.bu = result.l.newGauge()
       result.p = result.l.newGauge()

@@ -12,43 +12,40 @@ template smearForce(self: LatticeAction; f: auto): untyped =
 template smearForce(self: LatticeSubAction; f: auto): untyped = 
   self.smear[].sf(f,f)
 
-proc getStep*[A](self: A; step: int): seq[float] =
+proc getStep[A](self: A): seq[float] =
   result = newSeq[float]() 
   for sAction in self.subActions:
-    if (sAction.running) and (sAction.iStep == step):
-        result.add sAction.absCumSum/sAction.absScale
+    if sAction.running: result.add sAction.absCumSum/sAction.absScale
 
-proc setStep*[A](self: A; step: int; minabsdt, scale: float): float =
+proc setStep[A](self: A; minabsdt, scale: float): float =
   result = 0.0
   for sAction in self.subActions:
-    case sAction.running:
+    case (sAction.running): #and (not sAction.cycleCompleted):
       of true:
         let abscdt = sAction.absCumSum/sAction.absScale
         if abs(minabsdt - abscdt) <= Small64: # Mod for force-grad.?
           let nMD = sAction.updates.len div 2
-          sAction.timeStep = 2 * step.mod(nMD)
+          sAction.timeStep = 2*(sAction.iStep).mod(nMD)
           sAction.spaceStep = sAction.timeStep + 1
+
+          sAction.vdtau = sAction.updates[sAction.spaceStep].dtau*scale
+          result = abscdt*scale
           if not sAction.solo: sAction.includeInStep = true
 
+          sAction.iStep += 1
+          sAction.timeStep = 2*(sAction.iStep).mod(nMD)
+          sAction.spaceStep = sAction.timeStep + 1
+          
           sAction.cumSum += sAction.updates[sAction.timeStep].dtau
           sAction.absCumSum += abs(sAction.updates[sAction.timeStep].dtau)
-          sAction.iStep += 1
-          
-          sAction.vdtau = sAction.updates[sAction.spaceStep].dtau*scale
-          result = sAction.cumSum*scale
           if sAction.iStep == sAction.steps*nMD: sAction.running = false
         else: sAction.vdtau = 0.0
       of false: sAction.vdtau = 0.0
 
-proc getNumRunning*[A](self: A): int = 
+proc getNumRunning[A](self: A): int = 
   result = 0
   for sAction in self.subActions:
     if sAction.running: result += 1
-
-proc getNumNext*[A](self: A; step: int): int = 
-  result = 0
-  for sAction in self.subActions:
-    if sAction.iStep == step+1: result += 1
 
 proc smearGaugeForce(self: var Smearing) =
   if not self.smeared:
@@ -230,7 +227,10 @@ proc mdStep[A](
               subActions.add sAction
               sAction.includeInStep = false
       case subActions.len > 0:
-        of true: subActions.trajectory(u,f,p,type(subActions[0]),scale=dtau)
+        of true: 
+          echo "entering sub-integrator..........."
+          subActions.trajectory(u,f,p,type(subActions[0]),dtau)
+          echo "leaving sub-integrator..........."
         of false: u.updateGauge(p,dtau)
     of false: u.updateGauge(p,dtau)
 
@@ -247,48 +247,46 @@ proc mdStep[A](
       of PureMatter: discard
   actions.getMatterForce(u,f,p)
 
+  var ts = @[dtau]
+  for action in actions:
+    for sAction in action.subActions:
+      ts.add sAction.vdtau
+  echo ts
+
+
 template trajectory*[A](
     actions: seq[A]; 
     u: auto;
     f: auto;
     p: auto;
     a: typedesc[A];
-    scale: float = 1.0
+    scale: float
   ): untyped =
   var 
     step = 0
-    nFields = 0
+    nRunning = 0
+
+    minabsdt = Large64
 
     pTime = 0.0
     cTime = 0.0
 
     pdtau = 0.0
-    tdtau = 0.0
     dtau = 0.0
-
-    minabsdt = Large64
-    nNext = 0
-    nRunning = 0
     
     updateSpace = false
 
-  for action in actions: nFields += action.subActions.len
-
   while true:
     minabsdt = Large64
-    nNext = 0
     nRunning = 0
     updateSpace = false
 
     for action in actions:
-      let absdts = action.getStep(step)
+      let absdts = action.getStep
       for absdt in absdts:
         if absdt <= minabsdt: minabsdt = absdt
-    for action in actions: cTime = action.setStep(step, minabsdt, scale)
-    tdtau = cTime - pTime + pdtau
-
-    for action in actions: nNext += action.getNumNext(step)
-    if nNext == nFields: step += 1
+    for action in actions: cTime = action.setStep(minabsdt, scale)
+    dtau = cTime - pTime + pdtau
 
     for action in actions: nRunning += action.getNumRunning
 
@@ -296,7 +294,7 @@ template trajectory*[A](
       for sAction in action.subActions:
         if abs(sAction.vdtau) > Small64: updateSpace = true
 
-    if (updateSpace) or (nRunning == 0): actions.mdStep(tdtau, u, f, p)
+    if (updateSpace) or (nRunning == 0): actions.mdStep(dtau,u,f,p)
 
     if nRunning == 0:
       for action in actions:
@@ -305,11 +303,11 @@ template trajectory*[A](
           sAction.iStep = 0
           sAction.timeStep = 0
           sAction.spaceStep = 0
-          sAction.cumSum = 0.0
-          sAction.absCumSum = 0.0
+          sAction.cumSum = sAction.updates[0].dtau
+          sAction.absCumSum = abs(sAction.cumSum)
       break
     else:
       pdtau = case updateSpace
         of true: 0.0
-        of false: tdtau 
+        of false: dtau
       pTime = cTime

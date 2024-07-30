@@ -22,6 +22,7 @@ proc kineticAction(p: auto): float =
 template runHamiltonianMonteCarlo*(
     self: var LatticeFieldTheory; 
     samples: int;
+    trajectoryLength: float;
     measurements: untyped 
   ) =
 
@@ -31,7 +32,11 @@ template runHamiltonianMonteCarlo*(
       result += action.getAction
 
   proc trajectory {.gensym.} =
-    self.actions.trajectory(self.u[], self.f, self.p, type(self.actions[0]))
+    self.actions.trajectory(
+      self.u[], self.f, self.p, 
+      type(self.actions[0]), 
+      trajectoryLength
+    )
 
   proc metropolis(hi,hf: float): bool {.gensym.} =
     result = false
@@ -63,8 +68,7 @@ template runHamiltonianMonteCarlo*(
     self.pRNG.randomTAHGaussian(self.p)
 
     # Fermion heatbath
-    for action in self.actions: 
-      action.fermionHeatbath
+    for action in self.actions: action.fermionHeatbath
 
     # Get Hi
     hi = hamiltonian()
@@ -88,12 +92,15 @@ template runHamiltonianMonteCarlo*(
 if isMainModule:
   qexInit()
 
+  let
+    nsteps = 10 # Number of trajectories
+    tau = 1.0 # Trajectory length
+
   var
     fieldTheoryInfo = %* {
       "lattice-geometry": @[4,4,4,4],
       "mpi-geometry": @[1,1,1,1],
       "monte-carlo-algorithm": "hmc",
-      "trajectory-length": 1.0,
       "serial-random-number-seed": 987654321,
       "parallel-random-number-seed": 987654321,
       "serial-random-number-generator": "milc",
@@ -113,7 +120,7 @@ if isMainModule:
     }
     fermionFieldInfo = %* {
       "mass": 0.0,
-      "integrator": "2MN",
+      "integrator": "4MN5FP",
       "steps": 10
     }
     bosonFieldInfo = %* {
@@ -121,10 +128,15 @@ if isMainModule:
       "integrator": "2MN",
       "steps": 10
     }
-    subBosonFieldInfo = %* {
+    subBosonField1Info = %* {
       "mass": 0.75,
       "integrator": "2MN",
-      "steps": 2
+      "steps": 4 # Nested: steps per space update!
+    }
+    subBosonField2Info = %* {
+      "mass": 0.75,
+      "integrator": "4MN5FP",
+      "steps": 2 # Nested: steps per space update!
     }
 
   var hmc = newLatticeFieldTheory(fieldTheoryInfo):
@@ -132,10 +144,10 @@ if isMainModule:
     fieldTheory.addMatterAction(actionInfo):
       action.addStaggeredFermion(fermionFieldInfo)
       action.addStaggeredBoson(bosonFieldInfo):
-        subAction.addStaggeredBoson(subBosonFieldInfo) # Nested
-        subAction.addStaggeredBoson(subBosonFieldInfo) # Nested
+        subAction.addStaggeredBoson(subBosonField1Info) # Nested
+        subAction.addStaggeredBoson(subBosonField2Info) # Nested
 
-  hmc.runHamiltonianMonteCarlo(10):
+  hmc.runHamiltonianMonteCarlo(nsteps,tau):
     echo sample, " ", accepted, " ", hf-hi, " ", hi, " ", hf
     plaquette(u)
     polyakov(u)
