@@ -228,9 +228,9 @@ proc mdStep[A](
               sAction.includeInStep = false
       case subActions.len > 0:
         of true: 
-          echo "entering sub-integrator..........."
+          #echo "entering sub-integrator..........."
           subActions.trajectory(u,f,p,type(subActions[0]),dtau)
-          echo "leaving sub-integrator..........."
+          #echo "leaving sub-integrator..........."
         of false: u.updateGauge(p,dtau)
     of false: u.updateGauge(p,dtau)
 
@@ -247,11 +247,13 @@ proc mdStep[A](
       of PureMatter: discard
   actions.getMatterForce(u,f,p)
 
+  #[
   var ts = @[dtau]
   for action in actions:
     for sAction in action.subActions:
       ts.add sAction.vdtau
   echo ts
+  ]#
 
 
 template trajectory*[A](
