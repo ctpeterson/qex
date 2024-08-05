@@ -212,8 +212,11 @@ proc mdStep[A](
     f: auto; 
     p: auto
   ) =
+  var 
+    nested = false
+    hasMatter = false
+
   # Gauge field update
-  var nested = false
   for action in actions:
     for sAction in action.subActions:
       if not sAction.solo: nested = true
@@ -227,10 +230,7 @@ proc mdStep[A](
               subActions.add sAction
               sAction.includeInStep = false
       case subActions.len > 0:
-        of true: 
-          #echo "entering sub-integrator..........."
-          subActions.trajectory(u,f,p,type(subActions[0]),dtau)
-          #echo "leaving sub-integrator..........."
+        of true: subActions.trajectory(u,f,p,type(subActions[0]),dtau)
         of false: u.updateGauge(p,dtau)
     of false: u.updateGauge(p,dtau)
 
@@ -241,11 +241,12 @@ proc mdStep[A](
       of GaugeMatter, PureMatter:
         action.smear.rephased = false
         action.smear.smeared = false
+        hasMatter = true
   for action in actions:
     case action.action:
       of PureGauge, GaugeMatter: action.getGaugeForce(f,p)
       of PureMatter: discard
-  actions.getMatterForce(u,f,p)
+  if hasMatter: actions.getMatterForce(u,f,p)
 
   #[
   var ts = @[dtau]

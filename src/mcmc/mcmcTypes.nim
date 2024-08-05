@@ -64,6 +64,7 @@ type
     DBW2
   StaggeredActionType* = enum
     StaggeredFermion,
+    RootedStaggeredFermion,
     StaggeredHasenbuschFermion,
     StaggeredBoson
   WilsonActionType* = enum
@@ -128,6 +129,12 @@ type
     milc*: RngMilc6
     mrg*: MRG32k3a
 
+  RemezCoefficients* = object
+    nTerms: int
+    f0,if0: float
+    alpha,ialpha: seq[float]
+    beta,ibeta: seq[float]
+
   LatticeField*[S,T,U] = object
     id: string
     case field*: FieldType
@@ -138,9 +145,15 @@ type
       of StaggeredMatterField:
         staggeredFields*: seq[T]
         staggeredMasses*: seq[float]
-        staggeredAction*: StaggeredActionType
         stagActionSolverParams*: SolverParams
         stagForceSolverParams*: SolverParams
+        case staggeredAction*: StaggeredActionType
+          of RootedStaggeredFermion:
+            remez: RemezCoefficients
+            rPhi*: T
+            rStagActionSolverParams*: seq[SolverParams]
+            rStagForceSolverParams*: seq[SolverParams]
+          else: discard
       of WilsonMatterField:
         wilsonFields*: seq[U] 
         wilsonMasses*: seq[float] 
