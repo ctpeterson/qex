@@ -130,10 +130,10 @@ type
     mrg*: MRG32k3a
 
   RemezCoefficients* = object
-    nTerms: int
-    f0,if0: float
-    alpha,ialpha: seq[float]
-    beta,ibeta: seq[float]
+    nTerms*: int
+    f0*,if0*: float
+    alpha*,ialpha*: seq[float]
+    beta*,ibeta*: seq[float]
 
   LatticeField*[S,T,U] = object
     id: string
@@ -149,7 +149,7 @@ type
         stagForceSolverParams*: SolverParams
         case staggeredAction*: StaggeredActionType
           of RootedStaggeredFermion:
-            remez: RemezCoefficients
+            remez*: RemezCoefficients
             rPhi*: T
             rStagActionSolverParams*: seq[SolverParams]
             rStagForceSolverParams*: seq[SolverParams]

@@ -43,6 +43,8 @@ proc newStaggeredField[A](
   result = self.newLatticeSubAction(matterInfo, solo)
   result.pField = case sat
     of StaggeredFermion: self.l[].newStaggeredFermion(matterInfo)
+    of RootedStaggeredFermion: 
+      self.l[].newRootedStaggeredFermion(matterInfo)
     of StaggeredBoson: self.l[].newStaggeredBoson(matterInfo)
     of StaggeredHasenbuschFermion: 
       self.l[].newStaggeredHasenbuschFermion(matterInfo)
@@ -64,6 +66,10 @@ proc addStaggeredFermion*[A](self: var A; info: JsonNode) =
   let sat = StaggeredFermion
   self.subActions.add self.newStaggeredField(sat,true,info)
 
+proc addRootedStaggeredFermion*[A](self: var A; info: JsonNode) =
+  let sat = RootedStaggeredFermion
+  self.subActions.add self.newStaggeredField(sat,true,info)
+
 proc addStaggeredBoson*[A](self: var A; info: JsonNode) =
   let sat = StaggeredBoson
   self.subActions.add self.newStaggeredField(sat,true,info)
@@ -78,6 +84,14 @@ template addStaggeredFermion*[A](
     construction: untyped
   ) =
   let sat = StaggeredFermion
+  self.subActions.add self.newStaggeredField(sat, info, construction)
+
+template addRootedStaggeredFermion*[A](
+    self: var A;
+    info: JsonNode;
+    construction: untyped
+  ) =
+  let sat = RootedStaggeredFermion
   self.subActions.add self.newStaggeredField(sat, info, construction)
 
 template addStaggeredBoson*[A](

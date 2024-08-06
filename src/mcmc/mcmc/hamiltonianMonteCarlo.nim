@@ -120,8 +120,14 @@ if isMainModule:
     }
     fermionFieldInfo = %* {
       "mass": 0.0,
-      "integrator": "4MN5FP",
+      "integrator": "2MN",
       "steps": 10
+    }
+    rootedFermionFieldInfo = %* {
+      "mass": 0.0,
+      "integrator": "2MN",
+      "steps": 10,
+      "nf": 1
     }
     bosonFieldInfo = %* {
       "mass": 0.75,
@@ -143,11 +149,19 @@ if isMainModule:
     fieldTheory.addGaugeAction(gaugeFieldInfo)
     fieldTheory.addMatterAction(actionInfo):
       action.addStaggeredFermion(fermionFieldInfo)
-      action.addStaggeredBoson(bosonFieldInfo):
-        subAction.addStaggeredBoson(subBosonField1Info) # Nested
-        subAction.addStaggeredBoson(subBosonField2Info) # Nested
+      action.addRootedStaggeredFermion(rootedFermionFieldInfo)
+      action.addRootedStaggeredFermion(rootedFermionFieldInfo)
+      action.addRootedStaggeredFermion(rootedFermionFieldInfo)
+      action.addRootedStaggeredFermion(rootedFermionFieldInfo)
+      #action.addStaggeredBoson(bosonFieldInfo)
 
-  hmc.runHamiltonianMonteCarlo(nsteps,tau):
+  #
+  #    action.addStaggeredFermion(fermionFieldInfo)
+  #    action.addStaggeredBoson(bosonFieldInfo):
+  #      subAction.addStaggeredBoson(subBosonField1Info) # Nested
+  #      subAction.addStaggeredBoson(subBosonField2Info) # Nested
+
+  hmc.runHamiltonianMonteCarlo(nsteps,tau): #nsteps,tau):
     echo sample, " ", accepted, " ", hf-hi, " ", hi, " ", hf
     plaquette(u)
     polyakov(u)
