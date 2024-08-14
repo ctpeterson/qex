@@ -7,6 +7,7 @@ import stagD
 export stagD
 import solvers/bicgstab
 import solvers/gcr
+import solvers/cgm
 import maths
 import quda/qudaWrapper
 import grid/Grid
@@ -290,22 +291,184 @@ proc solve*(s:Staggered; x,b:Field; m:SomeNumber; sp0: var SolverParams) =
     echo "stagSolve: ", sp.getStats
   sp0.addStats(sp)
 
-# multimass (trivial version with multiple single mass calls for now)
-proc solve*(s: Staggered; r: seq[Field]; x: Field; m: seq[float];
-            sp: seq[SolverParams]) =
-  let n = m.len
-  doAssert(r.len == n)
-  doAssert(sp.len == n)
-  for i in 0..<n:
-    solve(s, r[i], x, m[i], sp[i])
+proc solveXX*(
+    s: Staggered;
+    xs: seq[Field];
+    b: Field;
+    ms: seq[float];
+    sp0: var SolverParams;
+    parEven: bool = true;
+    precon: CgPrecon = cpNone
+  ) = 
+  tic()
+  var 
+    cgm = newCgmState(xs,b,ms,precon=precon)
+    sp = sp0
+    oa: tuple[apply:proc(a,b:Field),precon:CgPrecon]
+    m = cgm.sigmas[0]
+  sp.resetStats()
+  dec sp.verbosity
 
-proc solve*(s: Staggered; r: seq[Field]; x: Field; m: seq[float];
-            sp: var SolverParams) =
+  case sp.backend:
+    of sbQEX:
+      proc op(x,y:Field) =
+        tic()
+        threadBarrier()
+        case parEven:
+          of true: stagD2ee(s.se, s.so, x, s.g, y, m*m)
+          of false: stagD2oo(s.se, s.so, x, s.g, y, m*m)
+        toc("stagD2XX")
+      case parEven:
+        of true: sp.subset.layoutSubset(b.l,"even")
+        of false: sp.subset.layoutSubset(b.l,"odd")
+      oa = (apply:op,precon:precon)
+      cgm.solve(oa,sp)
+      toc("cg.solve")
+      sp.calls = 1
+      sp.seconds = getElapsedTime()
+      sp.flops = float((s.g.len*4*72+60)*b.l.nEven*sp.iterations) # correct
+      if sp0.verbosity > 0:
+        case parEven:
+          of true: echo "solveEE(QEX): ", sp.getStats
+          of false: echo "solveOO(QEX): ", sp.getStats
+    of sbQuda: discard # Needs to be added!
+    of sbGrid: discard # Needs to be added!
+
+  sp.iterationsMax = sp.iterations
+  sp.r2.push 0.0
+  sp0.addStats(sp)
+
+proc solve*(
+    s: Staggered; 
+    xs: seq[Field]; 
+    b: Field; 
+    ms: seq[SomeNumber];
+    sp0: var SolverParams;
+    precon: CgPrecon = cpNone 
+  ) = 
+  doAssert(ms.len == xs.len)
+  tic()
+
+  # Set up variables
+  var 
+    parEven = true
+    nmass = xs.len
+    b2,r2,b2e,b2o: float
+    r2stop,r2stop2: float
+    r2stope,r2stopo: float
+    r = newOneOf(b)
+    sp = sp0
+    ys = newSeq[type(b)](ms.len)
+
+  # Helper templates, not important
+  template forMass(body:untyped) =
+    for k in 0..<nmass: 
+      let m {.inject.} = k
+      body
+  template mass: untyped = ms[0]
+  template x: untyped = xs[0]
+  template y: untyped = ys[0]
+
+  # Initial setup
+  threads:
+    var (b2t,b2et,b2ot) = (b.norm2,b.even.norm2,b.odd.norm2)
+    r := b
+    forMass: xs[m] := 0.0
+    threadBarrier()
+    threadMaster: (b2,b2e,b2o) = (b2t,b2et,b2ot)
+  r2 = b2e + b2o
+  r2stop = sp0.r2req * b2
+  sp.resetStats()
+  dec sp.verbosity
+  sp.usePrevSoln = false
+  if sp0.verbosity>1:
+    echo &"stagSolve b2: {b2:.6g}  r2: {r2/b2:.6g}  r2stop: {r2stop:.6g}"
+
+  # Full solve
+  for m in 0..<ms.len: ys[m] = newOneOf(xs[m])
+  while r2 > r2stop:
+    # Set up r^2 for solve
+    sp.maxits = sp0.maxits - sp.iterations
+    if sp.maxits <= 0: break
+    sp.r2req = r2stop
+    r2stop2 = 0.5 * sp.r2req
+    r2stope = (if b2o <= r2stop2: sp.r2req-b2o else: r2stop2)
+    r2stopo = (if b2e <= r2stop2: sp.r2req-b2e else: r2stop2)
+
+    # Solve
+    tic()
+    case (b2e <= r2stope or b2o <= r2stopo or mass == 0.0):
+      of true:
+        var xt = newOneOf(b)
+        if b2e > r2stope: (sp.r2req,parEven) = (r2stope/b2e,true)
+        elif b2o > r2stopo: (sp.r2req,parEven) = (r2stopo/b2o,false)
+        s.solveXX(ys,r,ms,sp,parEven=parEven)
+        toc("solveXX")
+        threads:
+          forMass:
+            case parEven:
+              of true: ys[m].even *= 4
+              of false: ys[m].odd *= 4
+          threadBarrier()
+          forMass: 
+            s.Ddag(xt,ys[m],ms[m])
+            threadBarrier()
+            ys[m] := xt
+      of false:
+        var
+          d = newOneOf(b)
+          d2e: float
+        threads:
+          var d2et: float
+          s.Ddag(d,r,mass)
+          threadBarrier()
+          d2et = d.even.norm2
+          threadMaster: d2e = d2et
+        sp.r2req *= 0.99*r2*mass*mass/d2e
+        toc("setup")
+        s.solveXX(ys,d,ms,sp,parEven=parEven)
+        toc("solveEE")
+        threads:
+          forMass: ys[m].even *= 4
+          threadBarrier()
+          forMass: s.eoReconstruct(ys[m],b,ms[m])
+    toc("reconstruct")
+
+    # Calculate/update r^2
+    threads:
+      var r2et,r2ot: float
+      forMass: xs[m] += ys[m]
+      threadBarrier()
+      s.D(r,x,mass)
+      threadBarrier()
+      r := b - r
+      threadBarrier()
+      (r2et,r2ot) = (r.even.norm2,r.odd.norm2)
+      threadMaster: (b2e,b2o) = (r2et,r2ot)
+    r2 = b2e + b2o
+    if sp.verbosity > 0: echo "stagSolve r2/b2: ", r2/b2
+
+  # Finish up
+  sp.r2.init r2/b2
+  sp.calls = 1
+  sp.seconds = getElapsedTime()
+  sp.flops += float((s.g.len*4*72+24)*xs[0].l.nEven) # ???
+  if sp0.verbosity > 0: echo "stagSolve: ", sp.getStats
+  sp0.addStats(sp)
+
+# trivial multi-mass
+proc solve*(
+    s: Staggered; 
+    r: seq[Field]; 
+    x: Field; 
+    m: seq[float];
+    sp: var seq[SolverParams]
+  ) =
   let n = m.len
   doAssert(r.len == n)
   doAssert(sp.len == n)
-  for i in 0..<n:
-    solve(s, r[i], x, m[i], sp)
+  for i in 0..<n: 
+    s.solve(r[i], x, m[i], sp[i])
 
 proc solve*(s:Staggered; r,x:Field; m:SomeNumber; res:float;
             cpuonly = false; sloppySolve = SloppyNone) =
@@ -429,7 +592,43 @@ when isMainModule:
     echo "even point"
     test()
     echo sp.getStats()
-#[
+
+  if intParam("timers", 0)!=0:
+    echoTimers()
+
+  var
+    nmass = 10
+    vs1 = newSeq[type(r)](nmass)
+    vs2 = newSeq[type(r)](nmass)
+    ms = newSeq[float](nmass)
+    spm = newSolverParams()
+    spms = newSeq[type(spm)](nmass)
+  for m in 0..<nmass:
+    vs1[m] = newOneOf(v1)
+    vs2[m] = newOneOf(v1)
+    ms[m] = m.float
+    spms[m] = newSolverParams()
+    spms[m].verbosity = intParam("verb", 2)
+    spms[m].subset.layoutSubset(lo, "all")
+    spms[m].maxits = int(1e9/lo.physVol.float)
+    spms[m].r2req = floatParam("rsq", 1e-12)
+  threads: v1.gaussian(rs)
+  spm.verbosity = intParam("verb", 2)
+  spm.subset.layoutSubset(lo, "all")
+  spm.maxits = int(1e9/lo.physVol.float)
+  spm.r2req = floatParam("rsq", 1e-12)
+
+  # Test multi-shift
+  echo "----------------"
+  echo "Multi-shift test"
+  s.solve(vs1,v1,ms,spm) # Real multi-mass
+  echo "----------------"
+  s.solve(vs2,v1,ms,spms) # Fake multi-mass
+  threads:
+    for m in 0..<nmass:
+      echo "difference (" & $(m) & "): ", (vs1[m]-vs2[m]).norm2
+
+  #[
   block:
     v1 := 0
     let p = lo.rankIndex([0,0,0,1])
@@ -444,8 +643,6 @@ when isMainModule:
     echo "random"
     test()
     echo sp.getStats()
-]#
-  if intParam("timers", 0)!=0:
-    echoTimers()
+  ]#
 
   qexFinalize()
