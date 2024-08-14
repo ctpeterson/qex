@@ -20,7 +20,7 @@ type
     xs*,ps*: seq[T]
     sigmas*: seq[float]
     zim1*,zi*,asim1*,bts*: seq[float]
-    b2,r2,r2stop: float
+    b2,r2*,r2stop*: float
     iterations: int
     precon: CgPrecon
 
@@ -49,36 +49,42 @@ proc initPrecon*(state: var CgmState) =
 
 # Construct new multi-shift CG state
 proc newCgmState*[T](
-    x,b: T; 
+    xs: seq[T];
+    b: T; 
     sigmas: seq[float];
     precon: CgPrecon = cpNone
   ): CgmState[T] =
-  let nmass = sigmas.len + 1
+  let nmass = sigmas.len
   result = CgmState[T]()
+  result.sigmas = sigmas
   result.b = b
   result.r = newOneOf(b)
   result.Ap = newOneOf(b)
-  result.sigmas = newSeq[float](nmass)
-  result.xs = newSeq[T](nmass)
+  result.xs = xs
   result.ps = newSeq[T](nmass)
-  for m in 0..<nmass:
-    case m == 0:
-      of true: 
-        result.sigmas[m] = 0.0
-        result.xs[m] = x
-        result.ps[m] = newOneOf(b)
-      of false: 
-        result.sigmas[m] = sigmas[m-1]
-        result.xs[m] = newOneOf(b)
-        result.ps[m] = newOneOf(b)
+  for m in 0..<nmass: result.ps[m] = newOneOf(b)
   result.precon = precon
   result.initPrecon
   result.reset
 
+proc newCgmState*[T](
+    x: T;
+    b: T; 
+    sigmas: seq[float];
+    precon: CgPrecon = cpNone
+  ): CgmState[T] =
+  var xs = newSeq[T](sigmas.len)
+  for m in 0..<sigmas.len:
+    xs[m] = case m == 0:
+      of true: x
+      of false: newOneOf(x)
+  newCgmState(xs, b, sigmas, precon = precon)
+
+
 # Multi-shift CG solver (arXiv:9612014)
 proc solve*(state: var CgmState; op: auto; sp: var SolverParams) = 
   mixin apply,applyPrecon
-  
+
   var 
     r2,r2stop: float
     b2 = state.b2
@@ -134,13 +140,19 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
   template preconL(z,r) =
     case precon:
       of cpNone: discard
-      of cpHerm: op.applyPrecon(z,r)
-      of cpLeftRight: op.applyPreconL(z,r)
+      of cpHerm:
+        when compiles(op.applyPrecon(z,r)): 
+          op.applyPrecon(z,r)
+      of cpLeftRight: 
+        when compiles(op.applyPreconL(z,r)):
+          op.applyPreconL(z,r)
 
   template preconR(p,q) =
     case precon:
       of cpNone,cpHerm: discard
-      of cpLeftRight: op.applyPreconR(p,q)
+      of cpLeftRight: 
+        when compiles(op.applyPreconR(p,q)):
+          op.applyPreconR(p,q)
 
   mythreads:
     var r2t,b2t: float
