@@ -1,6 +1,8 @@
 # Multi-mass (multi-shift) conjugate gradient
-# Based on "Krylov space solvers for shifted linear systems" 
-# by B. Jegerlehner (arXiv:9612014)
+# Based on "Krylov space solvers for shifted linear systems" (arXiv:9612014) 
+# and "Reduced-Shifted Conjugate-Gradient Method for a Green's Function: 
+# Efficient Numerical Approach in a Nano-structured Superconductor"
+# (arXiv:1607.03992v2)
 
 import qex
 import physics/qcdTypes
@@ -81,7 +83,7 @@ proc newCgmState*[T](
   newCgmState(xs, b, sigmas, precon = precon)
 
 
-# Multi-shift CG solver (arXiv:9612014)
+# Multi-shift CG solver (arXiv:9612014,1607.03992v2)
 proc solve*(state: var CgmState; op: auto; sp: var SolverParams) = 
   mixin apply,applyPrecon
 
@@ -131,8 +133,7 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
 
   template mythreads(body:untyped) =
     threads:
-      onNoSync(sub):
-        body
+      onNoSync(sub): body
 
   template subset(body:untyped) =
     onNoSync(sub): body
@@ -185,39 +186,38 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
         itn = 0
         r2r,r2i,r2ip1,qLAp: float
         continuing = true
+        alphaim1,betaim1: float
         bts = newSeq[float](nmass)
         asi = newSeq[float](nmass)
-        asim1 = newSeq[float](nmass)
         zim1 = newSeq[float](nmass)
         zi = newSeq[float](nmass)
         zip1 = newSeq[float](nmass)
       
       template alpha: untyped = asi[0]
-      template alphaim1: untyped = asim1[0]
       template beta: untyped = bts[0]
       template x: untyped = xs[0]
       template p: untyped = ps[0]
 
       # iteration 0
-      preconL(z,r)
-      subset:
-        q := z
-        r2i = case precon
-          of cpNone: r2
-          of cpHerm: redot(r,z)
-          of cpLeftRight: z.norm2
-      preconR(p,q)
+      (alphaim1,betaim1) = (1.0,0.0)
       forMass:
-        zim1[m] = 1.0
-        zi[m] = 1.0
-        asim1[m] = 1.0
-        bts[m] = 0.0
+        case m == 0:
+          of true:
+            preconL(z,r)
+            subset:
+              q := z
+              r2i = case precon
+                of cpNone: r2
+                of cpHerm: redot(r,z)
+                of cpLeftRight: z.norm2 
+            preconR(p,q)
+          of false: (zim1[m],zi[m]) = (alphaim1,alphaim1)
       verb(1): echo "CG iteration: ",itn,"  r2/b2: ",r2/b2
       
       while continuing:
         inc itn
         forMass:
-          case (m == 0):
+          case m == 0:
             of true: # sigma = 0 solve w/ optional precond.
               subset: op.apply(Ap,p)
               case precon:
@@ -225,11 +225,11 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
                 of cpNone,cpHerm: discard
               subset: qLAp = redot(q,LAp)
               alpha = case qLAp != 0.0
-                of true: -r2i/qLAp
+                of true: r2i/qLAp
                 of false: 0.0
               subset: 
-                r += alpha*Ap
-                x -= alpha*p
+                r -= alpha*Ap
+                x += alpha*p
               case precon:
                 of cpNone,cpHerm: preconL(z,r)
                 of cpLeftRight: 
@@ -250,33 +250,25 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
               if continuing:
                 subset: q := z + beta*q
                 preconR(p,q)
-            of false: # sigma > 0 solutions
+            of false: # shifted solutions
               let 
-                c1 = alpha*beta*(zim1[m]-zi[m])
-                c2 = zim1[m]*alphaim1*(1.0-sg[m]*alpha)
-              zip1[m] = case c1+c2 != 0.0 # (2.44)
+                c1 = alpha*betaim1*(zim1[m]-zi[m]) 
+                c2 = zim1[m]*alphaim1*(1.0+sg[m]*alpha)
+              zip1[m] = case c1+c2 != 0.0 
                 of true: zi[m]*zim1[m]*alphaim1/(c1+c2)
                 of false: 0.0
-              asi[m] = case zi[m] != 0.0 # (2.42)
+              asi[m] = case zi[m] != 0.0
                 of true: alpha*zip1[m]/zi[m]
                 of false: 0.0
-              bts[m] = case zi[m]*alpha != 0.0 # (2.43)
-                of true: beta*zip1[m]*asi[m]/zi[m]/alpha
-                of false: 0.0
-              subset: xs[m] -= asi[m]*ps[m]
+              subset: xs[m] += asi[m]*ps[m]
               if continuing:
-                subset: ps[m] := zi[m]*r + bts[m]*ps[m]
-        r2i = r2ip1
-        forMass:
-          case m == 0:
-            of true: asim1[m] = alpha
-            of false:
-              zim1[m] = zi[m]
-              zi[m] = zip1[m]
-              asim1[m] = asi[m]
-        if threadNum == 0:
-          r2 = r2r
-          itn0 = itn
+                bts[m] = case alpha != 0.0 
+                  of true: beta*asi[m]*asi[m]/(alpha*alpha)
+                  of false: 0.0
+                subset: ps[m] := zip1[m]*r + bts[m]*ps[m]
+                (zim1[m],zi[m]) = (zi[m],zip1[m])
+        (alphaim1,betaim1,r2i) = (alpha,beta,r2ip1)
+        if threadNum == 0: (r2,itn0) = (r2r,itn)
         verb(3):
           subset:
             echo "rz: ", r2i

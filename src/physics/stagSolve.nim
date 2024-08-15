@@ -150,6 +150,7 @@ proc solveReconR(s:Staggered; x,b:Field; m:SomeNumber; sp: var SolverParams;
     sp.r2req = r2stope / b2e
     toc("setup")
     s.solveEE(y, b, m, sp)
+    echo y.norm2
     toc("solveEE")
     threads:
       y.even *= 4
@@ -351,11 +352,12 @@ proc solve*(
 
   # Set up variables
   var 
-    parEven = true
+    parEven: bool
     nmass = xs.len
     b2,r2,b2e,b2o: float
     r2stop,r2stop2: float
     r2stope,r2stopo: float
+    shifts = newSeq[float](ms.len)
     r = newOneOf(b)
     sp = sp0
     ys = newSeq[type(b)](ms.len)
@@ -383,9 +385,13 @@ proc solve*(
   sp.usePrevSoln = false
   if sp0.verbosity>1:
     echo &"stagSolve b2: {b2:.6g}  r2: {r2/b2:.6g}  r2stop: {r2stop:.6g}"
+  for m in 0..<ms.len:
+    shifts[m] = case m == 0
+      of true: ms[m]
+      of false: ms[m]*ms[m]-mass*mass
+    ys[m] = newOneOf(xs[m])
 
   # Full solve
-  for m in 0..<ms.len: ys[m] = newOneOf(xs[m])
   while r2 > r2stop:
     # Set up r^2 for solve
     sp.maxits = sp0.maxits - sp.iterations
@@ -402,7 +408,17 @@ proc solve*(
         var xt = newOneOf(b)
         if b2e > r2stope: (sp.r2req,parEven) = (r2stope/b2e,true)
         elif b2o > r2stopo: (sp.r2req,parEven) = (r2stopo/b2o,false)
-        s.solveXX(ys,r,ms,sp,parEven=parEven)
+        s.solveXX(ys,r,shifts,sp,parEven=parEven)
+        for m in 0..<ms.len:
+          if m != 0:
+            var 
+              M = sqrt(shifts[0]*shifts[0]+shifts[m])
+              y1 = ys[m].norm2
+              y2: float
+            s.solveXX(ys[m],r,M,sp,parEven=parEven)
+            y2 = ys[m].norm2
+            echo m,": ",y1,"/",y2,"/",y1/y2
+        qexError "exiting"
         toc("solveXX")
         threads:
           forMass:
@@ -424,14 +440,15 @@ proc solve*(
           threadBarrier()
           d2et = d.even.norm2
           threadMaster: d2e = d2et
-        sp.r2req *= 0.99*r2*mass*mass/d2e
+        sp.r2req *= 0.99*mass*mass/d2e
         toc("setup")
-        s.solveXX(ys,d,ms,sp,parEven=parEven)
+        s.solveXX(ys,d,shifts,sp,parEven=true)
         toc("solveEE")
         threads:
           forMass: ys[m].even *= 4
           threadBarrier()
-          forMass: s.eoReconstruct(ys[m],b,ms[m])
+          forMass: s.eoReconstruct(ys[m],r,ms[m])
+          threadBarrier()
     toc("reconstruct")
 
     # Calculate/update r^2
@@ -606,13 +623,16 @@ when isMainModule:
   for m in 0..<nmass:
     vs1[m] = newOneOf(v1)
     vs2[m] = newOneOf(v1)
-    ms[m] = m.float
+    ms[m] = sqrt(m.float+1.0)
     spms[m] = newSolverParams()
     spms[m].verbosity = intParam("verb", 2)
     spms[m].subset.layoutSubset(lo, "all")
     spms[m].maxits = int(1e9/lo.physVol.float)
     spms[m].r2req = floatParam("rsq", 1e-12)
-  threads: v1.gaussian(rs)
+  threads: 
+    v1.gaussian(rs)
+    threadBarrier()
+    v1.odd := 0.0
   spm.verbosity = intParam("verb", 2)
   spm.subset.layoutSubset(lo, "all")
   spm.maxits = int(1e9/lo.physVol.float)
@@ -621,12 +641,13 @@ when isMainModule:
   # Test multi-shift
   echo "----------------"
   echo "Multi-shift test"
-  s.solve(vs1,v1,ms,spm) # Real multi-mass
+  s.solve(vs1,v1,ms,spms) # Fake multi-mass
   echo "----------------"
-  s.solve(vs2,v1,ms,spms) # Fake multi-mass
+  s.solve(vs2,v1,ms,spm) # Real multi-mass
   threads:
     for m in 0..<nmass:
-      echo "difference (" & $(m) & "): ", (vs1[m]-vs2[m]).norm2
+      var opt = "|v1|^2/|v2|^2/|v2-v1|^2 (" & $(m) & "): "
+      echo opt,vs1[m].norm2,"/",vs2[m].norm2,"/",(vs1[m]-vs2[m]).norm2
 
   #[
   block:
