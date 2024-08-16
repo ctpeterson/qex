@@ -18,10 +18,9 @@ export solverBase
 type
   # Multi-shift conjugate gradient type
   CgmState*[T] = object
-    r*,b*,z*,q*,Ap,LAp: T
-    xs*,ps*: seq[T]
+    r,b,z,q,Ap,LAp: T
+    xs,ps: seq[T]
     sigmas*: seq[float]
-    zim1*,zi*,asim1*,bts*: seq[float]
     b2,r2*,r2stop*: float
     iterations: int
     precon: CgPrecon
@@ -63,8 +62,9 @@ proc newCgmState*[T](
   result.r = newOneOf(b)
   result.Ap = newOneOf(b)
   result.xs = xs
-  result.ps = newSeq[T](nmass)
-  for m in 0..<nmass: result.ps[m] = newOneOf(b)
+  result.ps = newSeq[T]()
+  for m in 0..<nmass: 
+    result.ps.add newOneOf(xs[m])
   result.precon = precon
   result.initPrecon
   result.reset
@@ -155,22 +155,21 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
         when compiles(op.applyPreconR(p,q)):
           op.applyPreconR(p,q)
 
+  template x: untyped = xs[0]
+  template p: untyped = ps[0]
+
   mythreads:
     var r2t,b2t: float
     case b2 < 0.0: # new solution
-      of true:
-        forMass: xs[m] := 0.0
+      of true: 
         r := b
+        b2t = b.norm2
+        verb(1): echo "input norm2: ", b2t
       of false: # CG restart
         op.apply(Ap,xs[0])
         r := b - Ap
+        b2t = b2
     r2t = r.norm2
-    case b2 < 0.0:
-      of true: 
-        b2t = b.norm2
-        verb(1): echo "input norm2: ", b2t
-      of false: b2t = b2
-    forMass: ps[m] := r
     verb(3): 
       echo "p2: ", ps[0].norm2
       echo "r2: ", r2t
@@ -185,37 +184,36 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
       var
         itn = 0
         r2r,r2i,r2ip1,qLAp: float
-        continuing = true
+        alpha,beta: float
         alphaim1,betaim1: float
-        bts = newSeq[float](nmass)
-        asi = newSeq[float](nmass)
-        zim1 = newSeq[float](nmass)
         zi = newSeq[float](nmass)
-        zip1 = newSeq[float](nmass)
-      
-      template alpha: untyped = asi[0]
-      template beta: untyped = bts[0]
-      template x: untyped = xs[0]
-      template p: untyped = ps[0]
+        zim1 = newSeq[float](nmass)
+        continuing = true
 
       # iteration 0
-      (alphaim1,betaim1) = (1.0,0.0)
-      forMass:
-        case m == 0:
-          of true:
-            preconL(z,r)
-            subset:
-              q := z
-              r2i = case precon
-                of cpNone: r2
-                of cpHerm: redot(r,z)
-                of cpLeftRight: z.norm2 
-            preconR(p,q)
-          of false: (zim1[m],zi[m]) = (alphaim1,alphaim1)
+      (alphaim1,betaim1) = (1.0,0.0) # ???
+      forMass: (zim1[m],zi[m]) = (1.0,1.0)
+      preconL(z,r)
+      subset:
+        q := z
+        r2i = case precon
+          of cpNone: r2
+          of cpHerm: redot(r,z)
+          of cpLeftRight: z.norm2 
+      preconR(p,q)
+      forMass: 
+        subset:
+          case m == 0:
+            of true: discard
+            of false: ps[m] := p
+          xs[m] := 0.0
+
+      #[ YOU HAVE TO GO THROUGH ITERATION 0 EXPLICITLY!!!! ]#
+
       verb(1): echo "CG iteration: ",itn,"  r2/b2: ",r2/b2
       
+      # iteration 1,2,3,...
       while continuing:
-        inc itn
         forMass:
           case m == 0:
             of true: # sigma = 0 solve w/ optional precond.
@@ -233,7 +231,7 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
               case precon:
                 of cpNone,cpHerm: preconL(z,r)
                 of cpLeftRight: 
-                  subset: z += alpha*LAp
+                  subset: z -= alpha*LAp
               subset: 
                 r2ip1 = case precon
                   of cpNone: r.norm2
@@ -251,26 +249,36 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
                 subset: q := z + beta*q
                 preconR(p,q)
             of false: # shifted solutions
-              let 
-                c1 = alpha*betaim1*(zim1[m]-zi[m]) 
-                c2 = zim1[m]*alphaim1*(1.0+sg[m]*alpha)
-              zip1[m] = case c1+c2 != 0.0 
-                of true: zi[m]*zim1[m]*alphaim1/(c1+c2)
+              var zip1,zip1d,zr: float
+              zip1d = alpha*betaim1*(zim1[m]-zi[m]) 
+              zip1d += zim1[m]*alphaim1*(1.0+sg[m]*alpha)
+              zip1 = case zip1d != 0.0 
+                of true: zi[m]*zim1[m]*alphaim1/zip1d
                 of false: 0.0
-              asi[m] = case zi[m] != 0.0
-                of true: alpha*zip1[m]/zi[m]
+              zr = case zi[m] != 0.0
+                of true: zip1/zi[m]
                 of false: 0.0
-              subset: xs[m] += asi[m]*ps[m]
+              subset: xs[m] += alpha*zr*ps[m]
               if continuing:
-                bts[m] = case alpha != 0.0 
-                  of true: beta*asi[m]*asi[m]/(alpha*alpha)
-                  of false: 0.0
-                subset: ps[m] := zip1[m]*r + bts[m]*ps[m]
-                (zim1[m],zi[m]) = (zi[m],zip1[m])
+                subset: ps[m] := zip1*r + beta*zr*zr*ps[m]
+                (zim1[m],zi[m]) = (zi[m],zip1)
+        inc itn
         (alphaim1,betaim1,r2i) = (alpha,beta,r2ip1)
         if threadNum == 0: (r2,itn0) = (r2r,itn)
         verb(3):
+          var 
+            rip12,diff2,diffs2: float
+            rip1 = newOneOf(r)
+            diff = newOneOf(r)
+            diffs = newOneOf(r)
+            Ax = newOneOf(x)
+            Asx = newOneOf(x)
           subset:
+            op.apply(Ax,x)
+            threadBarrier()
+            diff := b - Ax
+            threadBarrier()
+            diff2 = diff.norm2
             echo "rz: ", r2i
             echo "qLAp: ", qLAp
             echo "alpha: ", alpha
@@ -280,6 +288,20 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
             echo "q2: ", q.norm2
             echo "Ap2: ", Ap.norm2
             echo "LAp2: ", LAp.norm2
+            echo "|b-Ax|^2: ", diff2
+          forMass:
+            subset: 
+              rip1 := zi[m]*r
+              op.apply(Asx,xs[m],sg[m])
+              threadBarrier()
+              diffs := b - Asx
+              threadBarrier()
+              rip12 = rip1.norm2
+              diffs2 = diffs.norm2
+            echo "zim1: ", zim1[m]
+            echo "zi: ", zi[m]
+            echo "rzs2: ", rip12
+            echo "|b-(A+sg)x|^2: ", diffs2
         verb(2): echo "CG iteration: ",itn,"  r2/b2: ",r2/b2
         threadBarrier()
   state.r2 = r2
