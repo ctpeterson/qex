@@ -191,7 +191,7 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
         continuing = true
 
       # iteration 0
-      (alphaim1,betaim1) = (1.0,0.0) # ???
+      (alphaim1,betaim1) = (-1.0,0.0)
       forMass: (zim1[m],zi[m]) = (1.0,1.0)
       preconL(z,r)
       subset:
@@ -208,19 +208,19 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
             of false: ps[m] := p
           xs[m] := 0.0
 
-      #[ YOU HAVE TO GO THROUGH ITERATION 0 EXPLICITLY!!!! ]#
-
       verb(1): echo "CG iteration: ",itn,"  r2/b2: ",r2/b2
       
       # iteration 1,2,3,...
       while continuing:
         forMass:
+          threadBarrier()
           case m == 0:
             of true: # sigma = 0 solve w/ optional precond.
               subset: op.apply(Ap,p)
               case precon:
                 of cpLeftRight: preconL(LAp,Ap)
                 of cpNone,cpHerm: discard
+              inc itn
               subset: qLAp = redot(q,LAp)
               alpha = case qLAp != 0.0
                 of true: r2i/qLAp
@@ -262,9 +262,10 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
               if continuing:
                 subset: ps[m] := zip1*r + beta*zr*zr*ps[m]
                 (zim1[m],zi[m]) = (zi[m],zip1)
-        inc itn
+        threadBarrier()
         (alphaim1,betaim1,r2i) = (alpha,beta,r2ip1)
         if threadNum == 0: (r2,itn0) = (r2r,itn)
+        threadBarrier()
         verb(3):
           var 
             rip12,diff2,diffs2: float

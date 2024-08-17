@@ -150,7 +150,6 @@ proc solveReconR(s:Staggered; x,b:Field; m:SomeNumber; sp: var SolverParams;
     sp.r2req = r2stope / b2e
     toc("setup")
     s.solveEE(y, b, m, sp)
-    echo y.norm2
     toc("solveEE")
     threads:
       y.even *= 4
@@ -298,40 +297,44 @@ proc solveXX*(
     b: Field;
     ms: seq[float];
     sp0: var SolverParams;
-    parEven: bool = true;
+    subset: string = "even";
     precon: CgPrecon = cpNone
   ) = 
   tic()
+
   var 
-    cgm = newCgmState(xs,b,ms,precon=precon)
     sp = sp0
-    oa: tuple[apply:proc(a,b:Field),precon:CgPrecon]
-    m = cgm.sigmas[0]
+    cgm = newCgmState(xs,b,ms,precon=precon)
+    mass = cgm.sigmas[0]
+
   sp.resetStats()
   dec sp.verbosity
-
   case sp.backend:
     of sbQEX:
-      proc op(x,y:Field) =
+      proc op(a,b:Field;shift:float=0.0) =
         tic()
         threadBarrier()
-        case parEven:
-          of true: stagD2ee(s.se, s.so, x, s.g, y, m*m)
-          of false: stagD2oo(s.se, s.so, x, s.g, y, m*m)
+        case subset:
+          of "even": stagD2ee(s.se, s.so, a, s.g, b, mass*mass+shift)
+          of "odd": stagD2oo(s.se, s.so, a, s.g, b, mass*mass+shift)
+          of "all": D(s,a,b,mass+shift)
+          else: discard
         toc("stagD2XX")
-      case parEven:
-        of true: sp.subset.layoutSubset(b.l,"even")
-        of false: sp.subset.layoutSubset(b.l,"odd")
-      oa = (apply:op,precon:precon)
-      cgm.solve(oa,sp)
+      for m in 0..<xs.len: 
+        case subset:
+          of "even","odd","all": sp.subset.layoutSubset(xs[m].l,subset)
+          else: qexError subset & " not a valid choice for subset"
+      cgm.solve((apply:op,precon:precon),sp)
       toc("cg.solve")
       sp.calls = 1
       sp.seconds = getElapsedTime()
       sp.flops = float((s.g.len*4*72+60)*b.l.nEven*sp.iterations) # correct
       if sp0.verbosity > 0:
-        case parEven:
-          of true: echo "solveEE(QEX): ", sp.getStats
-          of false: echo "solveOO(QEX): ", sp.getStats
+        case subset:
+          of "even": echo "solveEE(QEX): ", sp.getStats
+          of "odd": echo "solveOO(QEX): ", sp.getStats
+          of "all": echo "solveFull(QEX): ", sp.getStats
+          else: discard
     of sbQuda: discard # Needs to be added!
     of sbGrid: discard # Needs to be added!
 
@@ -350,9 +353,8 @@ proc solve*(
   doAssert(ms.len == xs.len)
   tic()
 
-  # Set up variables
   var 
-    parEven: bool
+    subset: string
     nmass = xs.len
     b2,r2,b2e,b2o: float
     r2stop,r2stop2: float
@@ -385,11 +387,7 @@ proc solve*(
   sp.usePrevSoln = false
   if sp0.verbosity>1:
     echo &"stagSolve b2: {b2:.6g}  r2: {r2/b2:.6g}  r2stop: {r2stop:.6g}"
-  for m in 0..<ms.len:
-    shifts[m] = case m == 0
-      of true: ms[m]
-      of false: ms[m]*ms[m]-mass*mass
-    ys[m] = newOneOf(xs[m])
+  for m in 0..<ms.len: ys[m] = newOneOf(xs[m])
 
   # Full solve
   while r2 > r2stop:
@@ -406,49 +404,34 @@ proc solve*(
     case (b2e <= r2stope or b2o <= r2stopo or mass == 0.0):
       of true:
         var xt = newOneOf(b)
-        if b2e > r2stope: (sp.r2req,parEven) = (r2stope/b2e,true)
-        elif b2o > r2stopo: (sp.r2req,parEven) = (r2stopo/b2o,false)
-        s.solveXX(ys,r,shifts,sp,parEven=parEven)
         for m in 0..<ms.len:
-          if m != 0:
-            var 
-              M = sqrt(shifts[0]*shifts[0]+shifts[m])
-              y1 = ys[m].norm2
-              y2: float
-            s.solveXX(ys[m],r,M,sp,parEven=parEven)
-            y2 = ys[m].norm2
-            echo m,": ",y1,"/",y2,"/",y1/y2
-        qexError "exiting"
+          shifts[m] = case m == 0
+            of true: ms[m]
+            of false: 4.0*(ms[m]*ms[m]-mass*mass)
+        if b2e > r2stope: (sp.r2req,subset) = (r2stope/b2e,"even")
+        elif b2o > r2stopo: (sp.r2req,subset) = (r2stopo/b2o,"odd")
+        s.solveXX(ys,r,shifts,sp,subset=subset)
         toc("solveXX")
         threads:
           forMass:
-            case parEven:
-              of true: ys[m].even *= 4
-              of false: ys[m].odd *= 4
+            case subset:
+              of "even": ys[m].even *= 4
+              of "odd": ys[m].odd *= 4
+              else: discard
           threadBarrier()
           forMass: 
             s.Ddag(xt,ys[m],ms[m])
             threadBarrier()
             ys[m] := xt
       of false:
-        var
-          d = newOneOf(b)
-          d2e: float
-        threads:
-          var d2et: float
-          s.Ddag(d,r,mass)
-          threadBarrier()
-          d2et = d.even.norm2
-          threadMaster: d2e = d2et
-        sp.r2req *= 0.99*mass*mass/d2e
-        toc("setup")
-        s.solveXX(ys,d,shifts,sp,parEven=true)
+        for m in 0..<ms.len:
+          shifts[m] = case m == 0
+            of true: ms[m]
+            of false: ms[m]-mass
+        subset = "all"
+        sp.r2req *= sp.r2req/r2
+        s.solveXX(ys,r,shifts,sp,subset=subset)
         toc("solveEE")
-        threads:
-          forMass: ys[m].even *= 4
-          threadBarrier()
-          forMass: s.eoReconstruct(ys[m],r,ms[m])
-          threadBarrier()
     toc("reconstruct")
 
     # Calculate/update r^2
@@ -623,12 +606,12 @@ when isMainModule:
   for m in 0..<nmass:
     vs1[m] = newOneOf(v1)
     vs2[m] = newOneOf(v1)
-    ms[m] = sqrt(m.float+1.0)
+    ms[m] = sqrt(m.float+2.0)
     spms[m] = newSolverParams()
     spms[m].verbosity = intParam("verb", 2)
     spms[m].subset.layoutSubset(lo, "all")
     spms[m].maxits = int(1e9/lo.physVol.float)
-    spms[m].r2req = floatParam("rsq", 1e-12)
+    spms[m].r2req = floatParam("rsq", 1e-20)
   threads: 
     v1.gaussian(rs)
     threadBarrier()
@@ -636,7 +619,7 @@ when isMainModule:
   spm.verbosity = intParam("verb", 2)
   spm.subset.layoutSubset(lo, "all")
   spm.maxits = int(1e9/lo.physVol.float)
-  spm.r2req = floatParam("rsq", 1e-12)
+  spm.r2req = floatParam("rsq", 1e-20)
 
   # Test multi-shift
   echo "----------------"
@@ -648,6 +631,18 @@ when isMainModule:
     for m in 0..<nmass:
       var opt = "|v1|^2/|v2|^2/|v2-v1|^2 (" & $(m) & "): "
       echo opt,vs1[m].norm2,"/",vs2[m].norm2,"/",(vs1[m]-vs2[m]).norm2
+  #[
+  |v1|^2/|v2|^2/|v2-v1|^2 (0): 3287.809101368401/3287.8091013684/4.636632042314934e-29
+  |v1|^2/|v2|^2/|v2-v1|^2 (1): 2568.359110086491/2568.35911008649/1.997428927380363e-17
+  |v1|^2/|v2|^2/|v2-v1|^2 (2): 2113.786729854334/2113.786729854335/1.660906734996757e-18
+  |v1|^2/|v2|^2/|v2-v1|^2 (3): 1798.469522116721/1798.469522116721/6.849969771177056e-19
+  |v1|^2/|v2|^2/|v2-v1|^2 (4): 1566.181314095443/1566.181314095443/9.742787966902989e-19
+  |v1|^2/|v2|^2/|v2-v1|^2 (5): 1387.633907370448/1387.633907370448/3.716383908778867e-18
+  |v1|^2/|v2|^2/|v2-v1|^2 (6): 1245.965086368947/1245.965086368947/3.299488749235974e-19
+  |v1|^2/|v2|^2/|v2-v1|^2 (7): 1130.743035492873/1130.743035492874/4.261994464214376e-18
+  |v1|^2/|v2|^2/|v2-v1|^2 (8): 1035.152505708646/1035.152505708646/6.896753008674151e-19
+  |v1|^2/|v2|^2/|v2-v1|^2 (9): 954.5456441870685/954.5456441870681/1.293292156285996e-19
+  ]#
 
   #[
   block:
