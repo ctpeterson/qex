@@ -86,7 +86,7 @@ template runHamiltonianMonteCarlo*(
     let accepted {.inject.} = metropolis(hi,hf)
 
     # Let user make their own measurements
-    let sample {.inject,used.} = smp
+    let trajectory {.inject,used.} = smp
     measurements
   
 if isMainModule:
@@ -162,7 +162,7 @@ if isMainModule:
   #      subAction.addStaggeredBoson(subBosonField2Info) # Nested
 
   hmc.runHamiltonianMonteCarlo(nsteps,tau): #nsteps,tau):
-    echo sample, " ", accepted, " ", hf-hi, " ", hi, " ", hf
+    echo trajectory, " ", accepted, " ", hf-hi, " ", hi, " ", hf
     plaquette(u)
     polyakov(u)
 
