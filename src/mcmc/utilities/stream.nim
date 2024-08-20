@@ -8,7 +8,7 @@ proc newMCStream*(name: string; start: bool = false): MCStream =
   echo "<begin: " & result.name & ">"
 
 proc add*(self: var MCStream; text: string) =
-  echo self.output & text & "\n"
+  echo self.output & text
 
 proc finishStream*(self: var MCStream) =
   echo self.output & "<end: " & self.name & ">"
