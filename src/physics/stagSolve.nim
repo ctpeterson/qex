@@ -294,7 +294,7 @@ proc solve*(s:Staggered; x,b:Field; m:SomeNumber; sp0: var SolverParams) =
 proc solveXX*(
     s: Staggered;
     xs: seq[Field];
-    b: Field;
+    bs: seq[Field];
     ms: seq[float];
     sp0: var SolverParams;
     subset: string = "even";
@@ -304,8 +304,10 @@ proc solveXX*(
 
   var 
     sp = sp0
-    cgm = newCgmState(xs,b,ms,precon=precon)
-    mass = cgm.sigmas[0]
+    cgm = case bs.len > 1
+      of true: newCgmState(xs,bs,ms,precon=precon)
+      of false: newCgmState(xs,bs[0],ms,precon=precon)
+    mass = ms[0]
 
   sp.resetStats()
   dec sp.verbosity
@@ -317,23 +319,21 @@ proc solveXX*(
         case subset:
           of "even": stagD2ee(s.se, s.so, a, s.g, b, mass*mass+shift)
           of "odd": stagD2oo(s.se, s.so, a, s.g, b, mass*mass+shift)
-          of "all": D(s,a,b,mass+shift)
           else: discard
         toc("stagD2XX")
       for m in 0..<xs.len: 
         case subset:
-          of "even","odd","all": sp.subset.layoutSubset(xs[m].l,subset)
+          of "even","odd": sp.subset.layoutSubset(xs[m].l,subset)
           else: qexError subset & " not a valid choice for subset"
       cgm.solve((apply:op,precon:precon),sp)
       toc("cg.solve")
       sp.calls = 1
       sp.seconds = getElapsedTime()
-      sp.flops = float((s.g.len*4*72+60)*b.l.nEven*sp.iterations) # correct
+      sp.flops = float((s.g.len*4*72+60)*bs[0].l.nEven*sp.iterations) # correct
       if sp0.verbosity > 0:
         case subset:
           of "even": echo "solveEE(QEX): ", sp.getStats
           of "odd": echo "solveOO(QEX): ", sp.getStats
-          of "all": echo "solveFull(QEX): ", sp.getStats
           else: discard
     of sbQuda: discard # Needs to be added!
     of sbGrid: discard # Needs to be added!
@@ -341,6 +341,16 @@ proc solveXX*(
   sp.iterationsMax = sp.iterations
   sp.r2.push 0.0
   sp0.addStats(sp)
+
+proc solveXX*(
+    s: Staggered;
+    xs: seq[Field];
+    b: Field;
+    ms: seq[float];
+    sp0: var SolverParams;
+    subset: string = "even";
+    precon: CgPrecon = cpNone
+  ) = s.solveXX(xs,@[b],ms,sp0,subset=subset,precon=precon)
 
 proc solve*(
     s: Staggered; 
@@ -383,11 +393,15 @@ proc solve*(
   r2 = b2e + b2o
   r2stop = sp0.r2req * b2
   sp.resetStats()
-  dec sp.verbosity
+  #dec sp.verbosity
   sp.usePrevSoln = false
   if sp0.verbosity>1:
     echo &"stagSolve b2: {b2:.6g}  r2: {r2/b2:.6g}  r2stop: {r2stop:.6g}"
-  for m in 0..<ms.len: ys[m] = newOneOf(xs[m])
+  for m in 0..<ms.len: 
+    shifts[m] = case m == 0
+      of true: ms[m]
+      of false: 4.0*(ms[m]*ms[m]-mass*mass)
+    ys[m] = newOneOf(xs[m])
 
   # Full solve
   while r2 > r2stop:
@@ -404,40 +418,86 @@ proc solve*(
     case (b2e <= r2stope or b2o <= r2stopo or mass == 0.0):
       of true:
         var xt = newOneOf(b)
-        for m in 0..<ms.len:
-          shifts[m] = case m == 0
-            of true: ms[m]
-            of false: 4.0*(ms[m]*ms[m]-mass*mass)
         if b2e > r2stope: (sp.r2req,subset) = (r2stope/b2e,"even")
         elif b2o > r2stopo: (sp.r2req,subset) = (r2stopo/b2o,"odd")
-        s.solveXX(ys,r,shifts,sp,subset=subset)
+        case mass == 0.0:
+          of true:
+            case subset:
+              of "even":
+                var bs = newSeq[type(ys[0])]()
+                forMass: bs.add newOneOf(b)
+                threads:
+                  forMass: 
+                    case m == 0:
+                      of true: bs[m] = b
+                      of false: s.Ddag(bs[m],b,ms[m])
+                s.solveXX(ys,bs,shifts,sp,subset=subset)
+              of "odd": s.solveXX(ys[0],b,shifts[0],sp,parEven=false)
+              else: discard
+          of false: s.solveXX(ys,r,shifts,sp,subset=subset)
         toc("solveXX")
         threads:
-          forMass:
-            case subset:
-              of "even": ys[m].even *= 4
-              of "odd": ys[m].odd *= 4
-              else: discard
-          threadBarrier()
-          forMass: 
-            s.Ddag(xt,ys[m],ms[m])
-            threadBarrier()
-            ys[m] := xt
+          case mass == 0.0:
+            of true:
+              case subset:
+                of "even":
+                  forMass:
+                    ys[m].even *= 4
+                    threadBarrier()
+                    if m != 0: s.eoReconstruct(ys[m],b,ms[m])
+                of "odd": ys[0].odd *= 4
+                else: discard
+              threadBarrier()
+              s.Ddag(xt,ys[0],ms[0])
+              threadBarrier()
+              ys[0] := xt
+            of false:
+              forMass:
+                case subset:
+                  of "even": ys[m].even *= 4
+                  of "odd": ys[m].odd *= 4
+                  else: discard
+              forMass: 
+                threadBarrier()
+                s.Ddag(xt,ys[m],ms[m])
+                threadBarrier()
+                ys[m] := xt
       of false:
-        for m in 0..<ms.len:
-          shifts[m] = case m == 0
-            of true: ms[m]
-            of false: ms[m]-mass
-        subset = "all"
-        sp.r2req *= sp.r2req/r2
-        s.solveXX(ys,r,shifts,sp,subset=subset)
+        var 
+          bs = newSeq[type(ys[0])]()
+          d2e: float
+        for m in 0..<xs.len: 
+          bs.add newOneOf(b)
+          xs[m] := 0.0
+        threads:
+          var d2et: float
+          forMass: s.Ddag(bs[m],b,ms[m])
+          threadBarrier()
+          d2et = bs[0].even.norm2
+          threadBarrier()
+          threadMaster: d2e = d2et
+        sp.r2req *= 0.99*r2*ms[0]*ms[0]/d2e/b2
+        s.solveXX(ys,bs,shifts,sp,subset="even")
         toc("solveEE")
+        threads:
+          forMass: 
+            ys[m].even *= 4
+            threadBarrier()
+            s.eoReconstruct(ys[m],b,ms[m])
+          threadBarrier()
     toc("reconstruct")
 
     # Calculate/update r^2
     threads:
       var r2et,r2ot: float
-      forMass: xs[m] += ys[m]
+      case mass == 0.0:
+        of true: 
+          case subset:
+            of "even":
+              forMass: xs[m] += ys[m]
+            of "odd": xs[0] += ys[0]
+        of false:
+          forMass: xs[m] += ys[m]
       threadBarrier()
       s.D(r,x,mass)
       threadBarrier()
@@ -447,6 +507,8 @@ proc solve*(
       threadMaster: (b2e,b2o) = (r2et,r2ot)
     r2 = b2e + b2o
     if sp.verbosity > 0: echo "stagSolve r2/b2: ", r2/b2
+    
+    #if mass == 0.0: qexError "quit"
 
   # Finish up
   sp.r2.init r2/b2
@@ -608,22 +670,22 @@ when isMainModule:
     vs2[m] = newOneOf(v1)
     ms[m] = sqrt(m.float+2.0)
     spms[m] = newSolverParams()
-    spms[m].verbosity = intParam("verb", 2)
+    spms[m].verbosity = intParam("verb", 1)
     spms[m].subset.layoutSubset(lo, "all")
     spms[m].maxits = int(1e9/lo.physVol.float)
     spms[m].r2req = floatParam("rsq", 1e-20)
   threads: 
     v1.gaussian(rs)
     threadBarrier()
-    v1.odd := 0.0
-  spm.verbosity = intParam("verb", 2)
+    #v1.odd := 0.0
+  spm.verbosity = intParam("verb", 1)
   spm.subset.layoutSubset(lo, "all")
   spm.maxits = int(1e9/lo.physVol.float)
   spm.r2req = floatParam("rsq", 1e-20)
 
   # Test multi-shift
   echo "----------------"
-  echo "Multi-shift test"
+  echo "Multi-shift test 1"
   s.solve(vs1,v1,ms,spms) # Fake multi-mass
   echo "----------------"
   s.solve(vs2,v1,ms,spm) # Real multi-mass
@@ -631,6 +693,33 @@ when isMainModule:
     for m in 0..<nmass:
       var opt = "|v1|^2/|v2|^2/|v2-v1|^2 (" & $(m) & "): "
       echo opt,vs1[m].norm2,"/",vs2[m].norm2,"/",(vs1[m]-vs2[m]).norm2
+  
+  # Test multi-shift
+  echo "----------------"
+  echo "Multi-shift test 2"
+  var ms2 = newSeq[float](ms.len)
+  for m in 0..<ms.len: ms2[m] = m.float
+  s.solve(vs1,v1,ms2,spms) # Fake multi-mass
+  echo "----------------"
+  s.solve(vs2,v1,ms2,spm) # Real multi-mass
+  threads:
+    for m in 0..<nmass:
+      var opt = "|v1|^2/|v2|^2/|v2-v1|^2 (" & $(m) & "): "
+      echo opt,vs1[m].norm2,"/",vs2[m].norm2,"/",(vs1[m]-vs2[m]).norm2
+
+  # Test multi-shift
+  echo "----------------"
+  echo "Multi-shift test 3"
+  threads: v1.odd := 0.0
+  s.solve(vs1,v1,ms,spms) # Fake multi-mass
+  echo "----------------"
+  s.solve(vs2,v1,ms,spm) # Real multi-mass
+  threads:
+    for m in 0..<nmass:
+      var opt = "|v1|^2/|v2|^2/|v2-v1|^2 (" & $(m) & "): "
+      echo opt,vs1[m].norm2,"/",vs2[m].norm2,"/",(vs1[m]-vs2[m]).norm2
+  
+  
   #[
   |v1|^2/|v2|^2/|v2-v1|^2 (0): 3287.809101368401/3287.8091013684/4.636632042314934e-29
   |v1|^2/|v2|^2/|v2-v1|^2 (1): 2568.359110086491/2568.35911008649/1.997428927380363e-17

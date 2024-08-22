@@ -19,7 +19,7 @@ type
   # Multi-shift conjugate gradient type
   CgmState*[T] = object
     r,b,z,q,Ap,LAp: T
-    xs,ps: seq[T]
+    xs,ps,bs: seq[T]
     sigmas*: seq[float]
     b2,r2*,r2stop*: float
     iterations: int
@@ -49,7 +49,7 @@ proc initPrecon*(state: var CgmState) =
       state.LAp = newOneOf(state.z)
 
 # Construct new multi-shift CG state
-proc newCgmState*[T](
+proc createCgmState*[T](
     xs: seq[T];
     b: T; 
     sigmas: seq[float];
@@ -58,16 +58,37 @@ proc newCgmState*[T](
   let nmass = sigmas.len
   result = CgmState[T]()
   result.sigmas = sigmas
+  result.xs = xs
+  result.ps = newSeq[T]()
+  result.bs = newSeq[T]()
+  for m in 0..<nmass: result.ps.add newOneOf(xs[m])
+  result.precon = precon
+  result.reset
+
+proc newCgmState*[T](
+    xs: seq[T];
+    bs: seq[T]; 
+    sigmas: seq[float];
+    precon: CgPrecon = cpNone
+  ): CgmState[T] = 
+  result = createCgmState(xs,bs[0],sigmas,precon=precon)
+  for m in 0..<bs.len: result.bs.add bs[m]
+  result.b = newOneOf(bs[0])
+  result.r = newOneOf(bs[0])
+  result.Ap = newOneOf(bs[0])
+  result.initPrecon
+
+proc newCgmState*[T](
+    xs: seq[T];
+    b: T; 
+    sigmas: seq[float];
+    precon: CgPrecon = cpNone
+  ): CgmState[T] = 
+  result = createCgmState(xs,b,sigmas,precon=precon)
   result.b = b
   result.r = newOneOf(b)
   result.Ap = newOneOf(b)
-  result.xs = xs
-  result.ps = newSeq[T]()
-  for m in 0..<nmass: 
-    result.ps.add newOneOf(xs[m])
-  result.precon = precon
   result.initPrecon
-  result.reset
 
 proc newCgmState*[T](
     x: T;
@@ -80,8 +101,11 @@ proc newCgmState*[T](
     xs[m] = case m == 0:
       of true: x
       of false: newOneOf(x)
-  newCgmState(xs, b, sigmas, precon = precon)
-
+  result = createCgmState(xs,b,sigmas,precon=precon)
+  result.b = b
+  result.r = newOneOf(b)
+  result.Ap = newOneOf(b)
+  result.initPrecon
 
 # Multi-shift CG solver (arXiv:9612014,1607.03992v2)
 proc solve*(state: var CgmState; op: auto; sp: var SolverParams) = 
@@ -94,10 +118,10 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
     maxits = sp.maxits
     sub = sp.subset
     restart = false
+    sg = newSeq[float]() #state.sigmas
   let 
     nmass = state.xs.len
     vrb = sp.verbosity
-    sg = state.sigmas
     r = state.r
     q = state.q
     z = state.z
@@ -106,7 +130,12 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
     LAp = state.LAp
     xs = state.xs
     b = state.b
+    bs = state.bs
     precon = state.precon
+  for m in 0..<xs.len: 
+    case m == 0:
+      of true: sg.add 0.0
+      of false: sg.add state.sigmas[m]
 
   if precon != state.precon:
     state.precon = precon
@@ -155,20 +184,54 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
         when compiles(op.applyPreconR(p,q)):
           op.applyPreconR(p,q)
 
+  template prod[T](x:T;m,k:int) =
+    for j in 0..<xs.len:
+      threadBarrier()
+      if (j != m) and (j != k):
+        Ap := 0
+        threadBarrier()
+        op.apply(Ap,x,0.25*sg[j])
+        threadBarrier()
+        Ap *= 1.0/(sg[j]-sg[k])
+        threadBarrier()
+        x := Ap
+
   template x: untyped = xs[0]
   template p: untyped = ps[0]
 
   mythreads:
     var r2t,b2t: float
-    case b2 < 0.0: # new solution
-      of true: 
-        r := b
-        b2t = b.norm2
-        verb(1): echo "input norm2: ", b2t
-      of false: # CG restart
+    case bs.len == 0:
+      of true:
+        case b2 < 0.0: # new solution
+          of true:
+            r := b
+            b2t = b.norm2
+            forMass: xs[m] := 0.0 
+            verb(1): echo "input norm2: ", b2t
+          of false: # CG restart
+            op.apply(Ap,xs[0])
+            r := b - Ap
+            b2t = b2
+      of false: # arXiv:0810.1081
+        for m in 0..<xs.len:
+          xs[m] := 0.0
+          for k in 0..<xs.len:
+            threadBarrier()
+            if k != m:
+              b := bs[m]-bs[k]
+              threadBarrier()
+              b *= 1.0/(sg[m]-sg[k])
+              threadBarrier() 
+              b.prod(m,k)
+              threadBarrier()
+              xs[m] += b
+        threadBarrier()
         op.apply(Ap,xs[0])
-        r := b - Ap
-        b2t = b2
+        threadBarrier()
+        r := bs[0] - Ap
+        b2t = bs[0].norm2
+    threadBarrier()
     r2t = r.norm2
     verb(3): 
       echo "p2: ", ps[0].norm2
@@ -206,7 +269,6 @@ proc solve*(state: var CgmState; op: auto; sp: var SolverParams) =
           case m == 0:
             of true: discard
             of false: ps[m] := p
-          xs[m] := 0.0
 
       verb(1): echo "CG iteration: ",itn,"  r2/b2: ",r2/b2
       
