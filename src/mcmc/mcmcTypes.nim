@@ -915,6 +915,8 @@ template newLatticeFieldTheory*(
     construction: untyped
   ): auto =
   echo banner
+  echo "# ranks: ", nRanks
+  threads: echo "# threads: ", numThreads
   block:
     var fieldTheory {.inject.} = newLatticeFieldTheory(info)
     construction

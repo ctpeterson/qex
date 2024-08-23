@@ -61,3 +61,6 @@ proc readCMD*: JsonNode =
           try: result[cmd.key] = %* parseFloat(cmd.val)
           except ValueError: result[cmd.key] = %* cmd.val
       of cmdEnd: break
+
+proc setFilename*(info: auto; fn: string) =
+  info["filename"] = %* fn 
