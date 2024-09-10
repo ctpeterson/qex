@@ -186,6 +186,19 @@ proc applyDdag(
   ) =
   threads: D(D.stag, psi, phi, -mass)
 
+proc rationalApprox[T](
+    phi: auto; 
+    psi: T; 
+    phis: seq[T]; 
+    alpha0: float; 
+    alpha: seq[float]
+  ) = 
+  threads:
+    phi := alpha0*psi
+    threadBarrier()
+    for idx in 0..<alpha.len: 
+      phi += alpha[idx]*phis[idx+1]
+
 proc applyD[T](
     D: DiracOperator;
     phi: T;
@@ -201,11 +214,7 @@ proc applyD[T](
       of true: mass
       of false: mass + beta[idx-1]
   solve(D.stag, phis, psi, shifts, sp0)
-  threads:
-    phi := f*psi
-    threadBarrier()
-    for idx in 0..<alpha.len:
-      phi += alpha[idx]*phis[idx+1]
+  phi.rationalApprox(psi,phis,f,alpha)
 
 proc applyDdag[T](
     D: DiracOperator;
@@ -298,6 +307,14 @@ proc solveD[T](
       of false: mass + beta[idx-1]
   solve(D.stag, phis, psi, shifts, sp0)
 
+proc solveD[T](
+    D: DiracOperator;
+    phis: seq[T];
+    psi: T;
+    masses: seq[float];
+    sp0: var SolverParams
+  ) = solve(D.stag, phis, psi, masses, sp0)
+
 proc solveDdag[T](
     D: DiracOperator;
     phis: seq[T];
@@ -307,6 +324,17 @@ proc solveDdag[T](
     sp0: var SolverParams
   ) = D.solveD(phis,psi,-mass,beta,sp0)
 
+proc solveDdag[T](
+    D: DiracOperator;
+    phis: seq[T];
+    psi: T;
+    masses: seq[float];
+    sp0: var SolverParams
+  ) = 
+  var nmasses = newSeq[float](masses.len)
+  for idx in 0..<nmasses.len: nmasses[idx] = -masses[idx]
+  solve(D.stag, phis, psi, nmasses, sp0)
+
 proc outer(f: auto; psi: auto; shifter: auto; dtau: float) =
     let n = psi[0].len
     threads:
@@ -314,18 +342,7 @@ proc outer(f: auto; psi: auto; shifter: auto; dtau: float) =
         for s in f[mu]:
           forO a, 0, n-1:
             forO b, 0, n-1:
-              f[mu][s][a,b] += dtau * psi[s][a] * shifter[mu].field[s][b].adj
-
-proc outer[T](f: auto; psis: seq[T]; shifter: auto; dtaus: seq[float]) =
-    let n = psis[0][0].len
-    for pf in 0..<dtaus.len:
-      for mu in 0..<f.len: discard shifter[mu] ^* psis[pf+1]
-      threads:
-        for mu in 0..<f.len:
-          for s in f[mu]:
-            forO a, 0, n-1:
-              forO b, 0, n-1:
-                f[mu][s][a,b]+=dtaus[pf]*psis[pf+1][s][a]*shifter[mu].field[s][b].adj
+              f[mu][s][a,b]+=dtau*psi[s][a]*shifter[mu].field[s][b].adj
 
 #[ 
 Methods for 
@@ -364,7 +381,6 @@ proc getStaggeredField*(self: var LatticeField; D: DiracOperator) =
   zeroOdd(self.phi)
 
 proc staggeredAction*(self: var LatticeField; D: var DiracOperator): float =
-  result = 0.0
   case self.staggeredAction:
     of StaggeredFermion,StaggeredHasenbuschFermion,StaggeredBoson: zero(D.stagPsi)
     of RootedStaggeredFermion: zero(self.staggeredFields)
@@ -373,24 +389,26 @@ proc staggeredAction*(self: var LatticeField; D: var DiracOperator): float =
       D.solveDdag(D.stagPsi, self.phi, self.mass, self.stagActionSolverParams)
       if self.mass <= Small64: D.applyNegDdagOdd(D.stagPsi, D.stagPsi)
     of RootedStaggeredFermion:
-      D.solveDdag(
+      D.applyDdag( 
+        D.stagPsi,
+        self.phi, 
         self.staggeredFields,
-        self.phi,
         self.mass,
+        self.remez.if0,
+        self.remez.ialpha,
         self.remez.ibeta,
         self.stagActionSolverParams
-      ) # Multimass solve
-      for idx in 0..<self.remez.ialpha.len:
-        result += 0.5*self.remez.ialpha[idx]*self.staggeredFields[idx+1].normSquared
+      ) # Applies (rational) inverse of D^{+}
     of StaggeredHasenbuschFermion:
       zero(self.phi2)
       D.applyDdag(self.phi2, self.phi1, self.mass2)
       D.solveDdag(D.stagPsi, self.phi2, self.mass1, self.stagActionSolverParams)
     of StaggeredBoson: D.applyDdag(D.stagPsi, self.phi, self.mass)
   case self.staggeredAction:
-    of StaggeredFermion,StaggeredHasenbuschFermion,StaggeredBoson:
+    of StaggeredHasenbuschFermion,StaggeredBoson: 
       result = 0.5*D.stagPsi.normSquared
-    of RootedStaggeredFermion: discard
+    of StaggeredFermion, RootedStaggeredFermion:
+      result = 0.5*D.stagPsi.normSquared
 
 proc stagForce*(
     self: var LatticeField;
@@ -398,20 +416,28 @@ proc stagForce*(
     fdtau: float;
     f: auto
   ) = 
-  var 
-    dtau = -0.5 * fdtau
-    dtaus = newSeq[float]()
-  D.stagPsi.zero
+  var dtau = case self.staggeredAction
+    of StaggeredFermion,StaggeredHasenbuschFermion: -0.5*fdtau
+    of StaggeredBoson: -0.5*fdtau
+    of RootedStaggeredFermion: 0.0
+  case self.staggeredAction:
+    of StaggeredFermion,StaggeredHasenbuschFermion: D.stagPsi.zero
+    of StaggeredBoson: D.stagPsi.zero
+    of RootedStaggeredFermion: discard
   case self.staggeredAction:
     of StaggeredFermion:
       D.solveD(D.stagPsi, self.phi, self.mass, self.stagForceSolverParams)
       if self.mass < Small64: D.applyDdag2OddAndReplaceEven(D.stagPsi, D.stagPsi)
     of RootedStaggeredFermion:
+      var effMasses = newSeq[float](self.staggeredFields.len)
+      for idx in 0..<self.staggeredFields.len:
+        effMasses[idx] = case idx == 0
+          of true: self.mass
+          of false: sqrt(self.mass*self.mass+self.remez.ibeta[idx-1])
       D.solveD(
         self.staggeredFields,
         self.phi,
-        self.mass,
-        self.remez.ibeta,
+        effMasses,
         self.stagForceSolverParams
       ) # Multimass solve
     of StaggeredHasenbuschFermion: 
@@ -423,15 +449,18 @@ proc stagForce*(
     of RootedStaggeredFermion: discard
   case self.staggeredAction:
     of StaggeredFermion:
-      if self.mass > Small64: dtau = dtau / self.mass
-      else: dtau = -0.5 * dtau
-    of RootedStaggeredFermion:
-      for n in 0..<self.remez.ialpha.len: 
-        dtaus.add self.remez.ialpha[n]*dtau/(self.remez.ibeta[n]+self.mass)
+      if self.mass > Small64: dtau = dtau/self.mass
+      else: dtau = -0.5*dtau
     of StaggeredHasenbuschFermion: 
-      dtau = dtau * (self.mass2.sq - self.mass1.sq) / self.mass1
-    of StaggeredBoson: dtau = 0.5 * dtau
+      dtau = dtau*(self.mass2.sq-self.mass1.sq)/self.mass1
+    of StaggeredBoson: dtau = 0.5*dtau
+    of RootedStaggeredFermion: discard
   case self.staggeredAction:
-    of StaggeredFermion, StaggeredHasenbuschFermion, StaggeredBoson:
-      f.outer(D.stagPsi, D.stagShifter, dtau)
-    of RootedStaggeredFermion: f.outer(self.staggeredFields, D.stagShifter, dtaus)
+    of StaggeredFermion,StaggeredBoson: f.outer(D.stagPsi, D.stagShifter, dtau)
+    of StaggeredHasenbuschFermion: f.outer(D.stagPsi, D.stagShifter, dtau)
+    of RootedStaggeredFermion:
+      for idx in 0..<self.remez.ialpha.len:
+        dtau = -0.5*fdtau*self.remez.ialpha[idx]
+        dtau = dtau/sqrt(self.mass*self.mass+self.remez.ibeta[idx])
+        for mu in 0..<f.len: discard D.stagShifter[mu] ^* self.staggeredFields[idx+1]
+        f.outer(self.staggeredFields[idx+1], D.stagShifter, dtau)
