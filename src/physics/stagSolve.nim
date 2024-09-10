@@ -294,22 +294,22 @@ proc solve*(s:Staggered; x,b:Field; m:SomeNumber; sp0: var SolverParams) =
 proc solveXX*(
     s: Staggered;
     xs: seq[Field];
-    bs: seq[Field];
+    b: Field;
     ms: seq[float];
     sp0: var SolverParams;
     subset: string = "even";
-    precon: CgPrecon = cpNone
+    precon: CgPrecon = cpNone;
+    recycle: bool = false
   ) = 
   tic()
 
   var 
     sp = sp0
-    cgm = case bs.len > 1
-      of true: newCgmState(xs,bs,ms,precon=precon)
-      of false: newCgmState(xs,bs[0],ms,precon=precon)
+    cgm = newCgmState(xs,b,ms,recycle,precon=precon)
     mass = ms[0]
 
   sp.resetStats()
+  dec sp0.verbosity
   dec sp.verbosity
   case sp.backend:
     of sbQEX:
@@ -329,7 +329,7 @@ proc solveXX*(
       toc("cg.solve")
       sp.calls = 1
       sp.seconds = getElapsedTime()
-      sp.flops = float((s.g.len*4*72+60)*bs[0].l.nEven*sp.iterations) # correct
+      sp.flops = float((s.g.len*4*72+60)*b.l.nEven*sp.iterations) # correct
       if sp0.verbosity > 0:
         case subset:
           of "even": echo "solveEE(QEX): ", sp.getStats
@@ -341,16 +341,6 @@ proc solveXX*(
   sp.iterationsMax = sp.iterations
   sp.r2.push 0.0
   sp0.addStats(sp)
-
-proc solveXX*(
-    s: Staggered;
-    xs: seq[Field];
-    b: Field;
-    ms: seq[float];
-    sp0: var SolverParams;
-    subset: string = "even";
-    precon: CgPrecon = cpNone
-  ) = s.solveXX(xs,@[b],ms,sp0,subset=subset,precon=precon)
 
 proc solve*(
     s: Staggered; 
@@ -373,6 +363,7 @@ proc solve*(
     r = newOneOf(b)
     sp = sp0
     ys = newSeq[type(b)](ms.len)
+    xt = newOneOf(b)
 
   # Helper templates, not important
   template forMass(body:untyped) =
@@ -387,13 +378,11 @@ proc solve*(
   threads:
     var (b2t,b2et,b2ot) = (b.norm2,b.even.norm2,b.odd.norm2)
     r := b
-    forMass: xs[m] := 0.0
     threadBarrier()
     threadMaster: (b2,b2e,b2o) = (b2t,b2et,b2ot)
   r2 = b2e + b2o
   r2stop = sp0.r2req * b2
   sp.resetStats()
-  #dec sp.verbosity
   sp.usePrevSoln = false
   if sp0.verbosity>1:
     echo &"stagSolve b2: {b2:.6g}  r2: {r2/b2:.6g}  r2stop: {r2stop:.6g}"
@@ -402,6 +391,7 @@ proc solve*(
       of true: ms[m]
       of false: 4.0*(ms[m]*ms[m]-mass*mass)
     ys[m] = newOneOf(xs[m])
+    threads: xs[m] := 0
 
   # Full solve
   while r2 > r2stop:
@@ -412,94 +402,23 @@ proc solve*(
     r2stop2 = 0.5 * sp.r2req
     r2stope = (if b2o <= r2stop2: sp.r2req-b2o else: r2stop2)
     r2stopo = (if b2e <= r2stop2: sp.r2req-b2e else: r2stop2)
-
+    if b2e > r2stope: (sp.r2req,subset) = (r2stope/b2e,"even")
+    elif b2o > r2stopo: (sp.r2req,subset) = (r2stopo/b2o,"odd")
+    
     # Solve
-    tic()
-    case (b2e <= r2stope or b2o <= r2stopo or mass == 0.0):
-      of true:
-        var xt = newOneOf(b)
-        if b2e > r2stope: (sp.r2req,subset) = (r2stope/b2e,"even")
-        elif b2o > r2stopo: (sp.r2req,subset) = (r2stopo/b2o,"odd")
-        case mass == 0.0:
-          of true:
-            case subset:
-              of "even":
-                var bs = newSeq[type(ys[0])]()
-                forMass: bs.add newOneOf(b)
-                threads:
-                  forMass: 
-                    case m == 0:
-                      of true: bs[m] = b
-                      of false: s.Ddag(bs[m],b,ms[m])
-                s.solveXX(ys,bs,shifts,sp,subset=subset)
-              of "odd": s.solveXX(ys[0],b,shifts[0],sp,parEven=false)
-              else: discard
-          of false: s.solveXX(ys,r,shifts,sp,subset=subset)
-        toc("solveXX")
-        threads:
-          case mass == 0.0:
-            of true:
-              case subset:
-                of "even":
-                  forMass:
-                    ys[m].even *= 4
-                    threadBarrier()
-                    if m != 0: s.eoReconstruct(ys[m],b,ms[m])
-                of "odd": ys[0].odd *= 4
-                else: discard
-              threadBarrier()
-              s.Ddag(xt,ys[0],ms[0])
-              threadBarrier()
-              ys[0] := xt
-            of false:
-              forMass:
-                case subset:
-                  of "even": ys[m].even *= 4
-                  of "odd": ys[m].odd *= 4
-                  else: discard
-              forMass: 
-                threadBarrier()
-                s.Ddag(xt,ys[m],ms[m])
-                threadBarrier()
-                ys[m] := xt
-      of false:
-        var 
-          bs = newSeq[type(ys[0])]()
-          d2e: float
-        for m in 0..<xs.len: 
-          bs.add newOneOf(b)
-          xs[m] := 0.0
-        threads:
-          var d2et: float
-          forMass: s.Ddag(bs[m],b,ms[m])
-          threadBarrier()
-          d2et = bs[0].even.norm2
-          threadBarrier()
-          threadMaster: d2e = d2et
-        sp.r2req *= 0.99*r2*ms[0]*ms[0]/d2e/b2
-        s.solveXX(ys,bs,shifts,sp,subset="even")
-        toc("solveEE")
-        threads:
-          forMass: 
-            ys[m].even *= 4
-            threadBarrier()
-            s.eoReconstruct(ys[m],b,ms[m])
-          threadBarrier()
-    toc("reconstruct")
+    s.solveXX(ys,r,shifts,sp,subset=subset)
 
     # Calculate/update r^2
     threads:
       var r2et,r2ot: float
-      case mass == 0.0:
-        of true: 
-          case subset:
-            of "even":
-              forMass: xs[m] += ys[m]
-            of "odd": xs[0] += ys[0]
-        of false:
-          forMass: xs[m] += ys[m]
+      forMass: 
+        case subset == "even":
+          of true: xs[m].even += 4.0*ys[m]
+          of false: xs[m].odd += 4.0*ys[m]
       threadBarrier()
-      s.D(r,x,mass)
+      s.Ddag(xt,x,mass)
+      threadBarrier()
+      s.D(r,xt,mass)
       threadBarrier()
       r := b - r
       threadBarrier()
@@ -507,8 +426,14 @@ proc solve*(
       threadMaster: (b2e,b2o) = (r2et,r2ot)
     r2 = b2e + b2o
     if sp.verbosity > 0: echo "stagSolve r2/b2: ", r2/b2
-    
-    #if mass == 0.0: qexError "quit"
+
+  # Get full solution for all solution vectors
+  threads:
+    forMass:
+      if m != 0: s.Ddag(xt,xs[m],ms[m])
+      threadBarrier()
+      xs[m] := xt
+      threadBarrier()
 
   # Finish up
   sp.r2.init r2/b2

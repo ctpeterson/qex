@@ -156,8 +156,6 @@ type
           of RootedStaggeredFermion:
             remez*: RemezCoefficients
             rPhi*: T
-            rStagActionSolverParams*: seq[SolverParams]
-            rStagForceSolverParams*: seq[SolverParams]
           else: discard
       of WilsonMatterField:
         wilsonFields*: seq[U] 
