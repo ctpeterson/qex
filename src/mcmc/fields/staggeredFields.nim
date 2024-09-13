@@ -51,46 +51,48 @@ proc newStaggeredFermion*(l: Layout; staggeredInformation: JsonNode): auto =
   stream.add "  mass = " & $(info["mass"].getFloat())
   stream.finishStream
 
+proc readJSONArray(input: JsonNode): seq[float] =
+  result = newSeq[float]()
+  for el in input.getElems(): result.add el.getFloat()
+
 proc newRootedStaggeredFermion*(lo: Layout; staggeredInformation: JsonNode): auto =
   var 
+    remezOrder,ratio: string
     info = checkJSON(staggeredInformation)
-    stream = newMCStream("new rooted staggered fermion")
-    l: string
+  let nf = info["nf"].getInt()
+  
   if not info.hasKey("mass"): qexError "Must specify fermion mass"
   if not info.hasKey("nf"): qexError "Must specify nf for rooted staggered fermion"
-
-  case $(info["nf"].getInt()):
+  case $nf:
     of "1","2","3": discard
     else: qexError "Only nf=1,2,3 supported for rooted staggered fermions"
-
-  if not info.hasKey("number-remez-terms"):
-    l = case $(info["nf"].getInt())
-      of "1": "15"
-      of "2": "15"
-      of "3": "10"
-      else: "15"
-  else: l = info["number-remez-terms"].getStr()
+  remezOrder = case info.hasKey("remez-order")
+    of true: $info["remez-order"].getInt()
+    of false: "15"
 
   result = lo.newLatticeField(info)
   result.newStaggeredField(info)
   result.staggeredFields = newSeq[lo.TT]()
 
   result.staggeredAction = RootedStaggeredFermion
-  for _ in 0..<parseInt(l)+1: result.staggeredFields.add lo.ColorVector()
+  for _ in 0..<parseInt(remezOrder)+1: result.staggeredFields.add lo.ColorVector()
   result.rPhi = lo.ColorVector()
   result.staggeredMasses.add info["mass"].getFloat()
 
-  result.remez = case l & "nf" & $(info["nf"].getInt())
-    of "15nf1": RemezL15N1D4
-    of "10nf2": RemezL10N1D2
-    of "15nf2": RemezL15N1D2
-    of "10nf3": RemezL10N3D4
-    else: RemezL15N1D4
-
-  stream.add "  mass = " & $(info["mass"].getFloat())
-  stream.add "  nf = " & $(info["nf"].getFloat())
-  stream.add "  # Remez terms = " & l
-  stream.finishStream
+  ratio = case $nf
+    of "1": "(1,4)"
+    of "2": "(1,2)"
+    of "3": "(3,4)"
+    else: "(1,4)"
+  result.remez = RemezCoefficients(
+    nTerms: parseInt(remezOrder),
+    f0: rationalCoefficients[ratio][remezOrder]["f0"].getFloat(),
+    if0: rationalCoefficients[ratio][remezOrder]["if0"].getFloat(),
+    alpha: rationalCoefficients[ratio][remezOrder]["alpha"].readJSONArray(),
+    ialpha: rationalCoefficients[ratio][remezOrder]["ialpha"].readJSONArray(),
+    beta: rationalCoefficients[ratio][remezOrder]["beta"].readJSONArray(),
+    ibeta: rationalCoefficients[ratio][remezOrder]["ibeta"].readJSONArray()
+  )
 
 proc newStaggeredBoson*(l: Layout; staggeredInformation: JsonNode): auto = 
   var 
@@ -418,7 +420,7 @@ proc stagForce*(
   ) = 
   var dtau = case self.staggeredAction
     of StaggeredFermion,StaggeredHasenbuschFermion: -0.5*fdtau
-    of StaggeredBoson: -0.5*fdtau
+    of StaggeredBoson: -0.25*fdtau
     of RootedStaggeredFermion: 0.0
   case self.staggeredAction:
     of StaggeredFermion,StaggeredHasenbuschFermion: D.stagPsi.zero
@@ -453,8 +455,7 @@ proc stagForce*(
       else: dtau = -0.5*dtau
     of StaggeredHasenbuschFermion: 
       dtau = dtau*(self.mass2.sq-self.mass1.sq)/self.mass1
-    of StaggeredBoson: dtau = 0.5*dtau
-    of RootedStaggeredFermion: discard
+    of StaggeredBoson,RootedStaggeredFermion: discard
   case self.staggeredAction:
     of StaggeredFermion,StaggeredBoson: f.outer(D.stagPsi, D.stagShifter, dtau)
     of StaggeredHasenbuschFermion: f.outer(D.stagPsi, D.stagShifter, dtau)
