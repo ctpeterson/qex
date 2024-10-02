@@ -14,10 +14,21 @@ export json
 export stream
 
 const banner = """
-Quantum EXpressions (QEX) authors: James Osborn & Xiao-Yong Jin
-QEX HMC authors: James Osborn, Xiao-Yong Jin, Curtis Taylor Peterson, Anna Hasenfratz
-QEX GitHub: https://github.com/jcosborn/qex
-QEX HMC GitHub: https://github.com/ctpeterson/qex
+
+|---------------------------------------------------------------|
+ Quantum EXpressions (QEX) Markov chain Monte Carlo
+
+ QEX authors: James Osborn & Xiao-Yong Jin
+ Monte Carlo authors: 
+   - Curtis Taylor Peterson [C.T.P.] (Michigan State University)
+   - James Osborn (Argonne National Laboratory)
+   - Xiao-Yong Jin (Argonne National Laboratory) 
+   - Anna Hasenfratz (University of Colorado Boulder)
+ QEX GitHub: https://github.com/jcosborn/qex
+ QEX Monte Carlo GitHub: https://github.com/ctpeterson/qex
+ C.T.P. email: curtistaylorpetersonwork@gmail.com
+ cite: Proceedings of Science (PoS) LATTICE2016 (2017) 271
+|---------------------------------------------------------------|
 """
 
 let 
@@ -882,28 +893,31 @@ proc newLatticeFieldTheory(info: JsonNode): auto =
     stream = newMCStream("new lattice field theory", start = true)
     latticeGeometry = newSeq[int]()
     mpiGeometry = newSeq[int]()
-  
-  if not info.hasKey("lattice-geometry"): 
-    qexError "Must specify lattice geometry"
-  else:
-    for idx,el in info["lattice-geometry"].getElems():
-      latticeGeometry.add el.getInt()
+    simdGeometry = newSeq[int]()
+  let lo = newLayout(intSeqParam("lat", latticeGeometry))
 
+  # "physical" box geometry
+  if not info.hasKey("lattice-geometry"): qexError "Must specify lattice geometry"
+  else:
+    for idx,el in info["lattice-geometry"].getElems(): latticeGeometry.add el.getInt()
+
+  # rank geometry
   case info.hasKey("mpi-geometry"):
     of true:
-      for idx,el in info["mpi-geometry"].getElems():
-        mpiGeometry.add el.getInt()
+      for idx,el in info["mpi-geometry"].getElems(): mpiGeometry.add el.getInt()
     of false:
       if info.hasKey("rank-geometry"):
-        for idx,el in info["rank-geometry"].getElems():
-          mpiGeometry.add el.getInt()
-      else:
-        for _ in latticeGeometry: mpiGeometry.add 1
-        var msg = "  Warning! MPI (rank) geometry not specified. "
-        msg = msg & "Default is unity in each dimension."
-        stream.add msg
+        for idx,el in info["rank-geometry"].getElems(): mpiGeometry.add el.getInt()
+      else: mpiGeometry = lo.rankGeom
+  
+  # simd (vector) geometry
+  case info.hasKey("inner-geometry"):
+    of true:
+      for idx,el in info["inner-geometry"].getElems(): simdGeometry.add el.getInt()
+    of false: simdGeometry = lo.innerGeom
 
-  let l = newLayout(intSeqParam("lat", latticeGeometry), mpiGeometry)
+  # set lattice layout & instantiate LatticeFieldTheory object
+  let l = newLayout(intSeqParam("lat", latticeGeometry), lo.V, mpiGeometry, simdGeometry)
   result = l.newLatticeFieldTheory(info, stream, l.SS, l.TT, l.UU, l.VV, l.WW, l.XX)
   
   stream.finishStream

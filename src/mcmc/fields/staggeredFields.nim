@@ -126,7 +126,7 @@ proc newStaggeredHasenbuschFermion*(
   result.newStaggeredField(info)
   result.staggeredFields = newSeq[l.TT]()
 
-  result.staggeredAction = StaggeredFermion
+  result.staggeredAction = StaggeredHasenbuschFermion
   for mass in masses:
     result.staggeredFields.add l.ColorVector()
     result.staggeredMasses.add mass
@@ -376,8 +376,8 @@ proc getStaggeredField*(self: var LatticeField; D: DiracOperator) =
         self.stagActionSolverParams
       ) # Applies D^{+}; still a solve when rooted
     of StaggeredHasenbuschFermion: 
-      D.solveDdag(self.phi2, D.stagPsi, self.mass2, self.stagActionSolverParams)
-      D.applyDdag(self.phi1, self.phi2, self.mass1)
+      D.applyDdag(self.phi2, D.stagPsi, self.mass1)
+      D.solveDdag(self.phi1, self.phi2, self.mass2, self.stagActionSolverParams)
     of StaggeredBoson: 
       D.solveDdag(self.phi, D.stagPsi, self.mass, self.stagActionSolverParams)
   zeroOdd(self.phi)
@@ -402,9 +402,9 @@ proc staggeredAction*(self: var LatticeField; D: var DiracOperator): float =
         self.stagActionSolverParams
       ) # Applies (rational) inverse of D^{+}
     of StaggeredHasenbuschFermion:
-      zero(self.phi2)
-      D.applyDdag(self.phi2, self.phi1, self.mass2)
-      D.solveDdag(D.stagPsi, self.phi2, self.mass1, self.stagActionSolverParams)
+      zero(D.stagPsi)
+      D.applyD(self.phi2, self.phi1, self.mass2)
+      D.solveD(D.stagPsi, self.phi2, self.mass1, self.stagActionSolverParams)
     of StaggeredBoson: D.applyDdag(D.stagPsi, self.phi, self.mass)
   case self.staggeredAction:
     of StaggeredHasenbuschFermion,StaggeredBoson: 
