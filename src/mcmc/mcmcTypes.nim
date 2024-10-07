@@ -894,7 +894,7 @@ proc newLatticeFieldTheory(info: JsonNode): auto =
     latticeGeometry = newSeq[int]()
     mpiGeometry = newSeq[int]()
     simdGeometry = newSeq[int]()
-  let lo = newLayout(intSeqParam("lat", latticeGeometry))
+    (mpiGeomSpecified,simdGeomSpecified) = (false,false)
 
   # "physical" box geometry
   if not info.hasKey("lattice-geometry"): qexError "Must specify lattice geometry"
@@ -902,22 +902,21 @@ proc newLatticeFieldTheory(info: JsonNode): auto =
     for idx,el in info["lattice-geometry"].getElems(): latticeGeometry.add el.getInt()
 
   # rank geometry
-  case info.hasKey("mpi-geometry"):
-    of true:
-      for idx,el in info["mpi-geometry"].getElems(): mpiGeometry.add el.getInt()
-    of false:
-      if info.hasKey("rank-geometry"):
-        for idx,el in info["rank-geometry"].getElems(): mpiGeometry.add el.getInt()
-      else: mpiGeometry = lo.rankGeom
+  if info.hasKey("mpi-geometry"):
+    for idx,el in info["mpi-geometry"].getElems(): mpiGeometry.add el.getInt()
+    mpiGeomSpecified = true
   
+  #[
   # simd (vector) geometry
-  case info.hasKey("inner-geometry"):
-    of true:
-      for idx,el in info["inner-geometry"].getElems(): simdGeometry.add el.getInt()
-    of false: simdGeometry = lo.innerGeom
+  if info.hasKey("inner-geometry"):
+    for idx,el in info["inner-geometry"].getElems(): simdGeometry.add el.getInt()
+    simdGeomSpecified = true
+  ]#
 
   # set lattice layout & instantiate LatticeFieldTheory object
-  let l = newLayout(intSeqParam("lat", latticeGeometry), lo.V, mpiGeometry, simdGeometry)
+  let l = case mpiGeomSpecified
+    of true: newLayout(latticeGeometry, mpiGeometry)
+    of false: newLayout(latticeGeometry)
   result = l.newLatticeFieldTheory(info, stream, l.SS, l.TT, l.UU, l.VV, l.WW, l.XX)
   
   stream.finishStream
