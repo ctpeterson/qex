@@ -47,6 +47,7 @@ macro echo0*(args: varargs[untyped]): untyped =
   var call = newCall(bindSym"echoRaw")
   result = evalArgs(call, args)
   result.add(quote do:
+    bind myRank
     if myRank==0 and threadNum==0:
       `call`
     )
@@ -179,16 +180,18 @@ macro rankSumN*(comm:Comm, a:varargs[typed]):auto =
         i0 = i
         break
   if i0<0:
+    let b = newNimNode(nnkBracket)
     var s = newNimNode(nnkStmtList)
     let t = ident("t")
     for i in 0..<a.len:
+      b.add a[i]
       let ai = a[i]
       let x = quote do:
         `ai` = `t`[`i`]
       s.add x
     result = quote do:
       if threadNum==0:
-        var `t` = `a`
+        var `t` = `b`
         `comm`.sum(`t`)
         `s`
   else:
