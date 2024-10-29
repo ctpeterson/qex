@@ -1,4 +1,4 @@
-import qex, gauge, physics/qcdTypes, maths/groupOps
+import qex, gauge, physics/qcdTypes, maths/groupOps, gauge/stoutsmear
 import math, os, sequtils, strformat, strutils, times, typetraits, json
 import purestout, utilityprocs
 
@@ -25,7 +25,9 @@ type
     NActRectStout, 
     NActSymanzikStout, 
     NActIwasakiStout, 
-    NActDBW2Stout
+    NActDBW2Stout,
+    NActPlaquetteCharge,
+    NActPlaquetteChargeStout
 
 type DAdjointVectorV = Color[VectorArray[dA,DComplexV]]
 var Ta = newSeq[Color[MatrixArray[nc,nc,DComplexV]]](dA)
@@ -60,17 +62,18 @@ qexinit()
 
 letParam:
   gact: GaugeActType = "ActSymanzik"
-  nact: NambuActType = "NActSymanzikStout"
+  nact: NambuActType = "NActPlaquetteCharge"
   lat = @[8,8,8,8]
   beta = 9.0
   nBeta = 9.0
+  betaQ = 9.0
   adjFac = -0.25
   nAdjFac = -0.25
   rectFac = -1.0/12.0
   nRectFac = -1.0/12.0
   tau = 1.0
   trajs = 50
-  steps = 50
+  steps = 100
   stepSize = tau/steps
   seed: uint64 = 987654321
   nstout = 3
@@ -102,6 +105,8 @@ let
     of NActSymanzik,NActSymanzikStout: Symanzik(nBeta)
     of NActIwasaki,NActIwasakiStout: Iwasaki(nBeta)
     of NActDBW2,NActDBW2Stout: DBW2(nBeta)
+    of NActPlaquetteCharge,NActPlaquetteChargeStout: 
+      GaugeActionCoeffs(plaq: betaQ)
 
 var
   lo = lat.newLayout
@@ -135,9 +140,13 @@ proc action(): float =
 proc auxAction(): float =
   result = case nact
     of NActAdjoint: ngc.actionA(g)
+    of NActPlaquetteCharge: ngc.topologicalCharge(g)
     of NActWilsonStout,NActRectStout: ngc.smearedAction1(stout,g)
     of NActSymanzikStout,NActIwasakiStout: ngc.smearedAction1(stout,g)
     of NActDBW2Stout: ngc.smearedAction1(stout,g)
+    of NActPlaquetteChargeStout: 
+      stout.smear(g)
+      ngc.topologicalCharge(stout.su[^1])
     else: ngc.gaugeAction1(g)
 
 proc updateMomentum(ui: auto; vi: auto; dtau: float) =
@@ -150,9 +159,20 @@ proc updateMomentum(ui: auto; vi: auto; dtau: float) =
 proc nambuForce() =
   case nact:
     of NActAdjoint: ngc.forceA(g,f)
+    of NActPlaquetteCharge: ngc.topologicalForce(g,f)
     of NActWilsonStout,NActRectStout: ngc.smearedGaugeForce(stout,g,f)
     of NActSymanzikStout,NActIwasakiStout: ngc.smearedGaugeForce(stout,g,f)
     of NActDBW2Stout: ngc.smearedGaugeForce(stout,g,f)
+    of NActPlaquetteChargeStout: 
+      stout.smear(g)
+      for idx in countdown(stout.nstout,0):
+        let xdi = stout.nstout - idx
+        if xdi == 0: ngc.topologicalDeriv(stout.su[^1],stout.sf[^1])
+        elif xdi == stout.nstout: stout.stout[idx].smearDeriv(f,stout.sf[1])
+        else: stout.stout[idx].smearDeriv(stout.sf[idx],stout.sf[idx+1])
+      contractProjectTAH(g,f)
+      #threads:
+      #  for mu in 0..<f.len: f[mu].projectTAH(f[mu])
     else: ngc.gaugeForce(g,f)
   bf.setGauge(f)
 
@@ -213,6 +233,7 @@ for traj in 0..<trajs:
   (hi,ahi) = (hamiltonian(),auxHamiltonian())
 
   for step in 0..<steps:
+    #qexLog "step: " & $(step)
     if step == 0: updateU(0.5*stepSize)
     else: updateU(stepSize)
     updateP(0.5*stepSize)
@@ -234,10 +255,12 @@ for traj in 0..<trajs:
   g.mplaq
   g.ploop
 
+  #[
   let filename = "C0p0_" & $(traj) & ".log"
   flowInfo["C0p0"].setFilename(filename)
   g.gradientFlow(flowInfo):
     let output = measurements.formatMeasurements(style="KS_nHYP_FA")
     f.write(output & "\n")
+  ]#
 
 qexfinalize()

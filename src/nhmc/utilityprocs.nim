@@ -36,6 +36,80 @@ proc ploop*(g:auto) =
   echo "MEASploop spatial: ",pls.re," ",pls.im," temporal: ",plt.re," ",plt.im
   toc("ploop")
 
+proc reTrMul(x,y:auto):auto =
+  var d: type(eval(toDouble(redot(x[0],y[0]))))
+  for ir in x:
+    d += redot(x[ir].adj, y[ir])
+  result = simdSum(d)
+  x.l.threadRankSum(result)
+
+proc fmunu[S](u: seq[S]): seq[seq[S]] =
+  let
+    lo = u[0].l
+    nd = lo.nDim
+    t = newTransporters(u,u[0],1)
+  var fmunu = newSeq[seq[S]](nd)
+  for mu in 1..<nd: 
+    fmunu[mu] = newSeq[S](mu)
+    for nu in 0..<mu: fmunu[mu][nu] = lo.ColorMatrix()
+  threads:
+    for mu in 1..<nd:
+      for nu in 0..<mu: fmunu[mu][nu] := (t[mu]^*u[nu]) * (t[nu]^*u[mu]).adj
+  result = fmunu
+
+proc sfmunu[S](fmunu: seq[seq[S]]): auto =
+  let
+    lo = fmunu[1][0].l
+    nd = lo.nDim
+  var sfmunu = newSeq[seq[S]](nd)
+  for mu in 1..<nd:
+    sfmunu[mu] = newSeq[S](mu)
+    for nu in 0..<mu:
+      sfmunu[mu][nu] = lo.ColorMatrix()
+      var t = newShifter(fmunu[mu][nu],nu,-1)
+      discard t ^* fmunu[mu][nu]
+      threads: 
+        sfmunu[mu][nu] := fmunu[mu][nu] + t.field[nu]
+  result = sfmunu
+
+proc topologicalCharge*(gc: GaugeActionCoeffs; u: auto): float =
+  let 
+    fmunu = u.fmunu
+    betaq = gc.plaq
+  var q: float
+  threads:
+    let
+      a = reTrMul(fmunu[1][0], fmunu[3][2])
+      b = reTrMul(fmunu[2][0], fmunu[3][1])
+      c = reTrMul(fmunu[2][1], fmunu[3][0])
+    threadMaster: q = -betaq*(a-b+c)
+  result = q
+
+proc topologicalForce*(gc: GaugeActionCoeffs; u,f: auto) =
+  let 
+    fmunu = u.fmunu
+    sfmunu = fmunu.sfmunu
+    betaq = gc.plaq
+  threads:
+    for mu in 0..<f.len:
+      if mu == 0: f[mu] := betaq*fmunu[2][1]*fmunu[3][0]
+      elif mu == 1: f[mu] := -betaq*fmunu[1][0]*fmunu[3][2]
+      elif mu == 2: f[mu] := -betaq*fmunu[2][0]*fmunu[3][1]
+      elif mu == 3: f[mu] := -f[0]
+      f[mu].projectTAH(f[mu])
+
+proc topologicalDeriv*(gc: GaugeActionCoeffs; u,f: auto) =
+  let 
+    fmunu = u.fmunu
+    sfmunu = fmunu.sfmunu
+    betaq = gc.plaq
+  threads:
+    for mu in 0..<f.len:
+      if mu == 0: f[mu] := betaq*fmunu[2][1]*fmunu[3][0]
+      elif mu == 1: f[mu] := -betaq*fmunu[1][0]*fmunu[3][2]
+      elif mu == 2: f[mu] := -betaq*fmunu[2][0]*fmunu[3][1]
+      elif mu == 3: f[mu] := -f[0]
+
 proc setGauge*(u: auto; v: auto) =
   threads:
     for mu in 0..<u.len:
@@ -230,3 +304,16 @@ proc formatMeasurements*(
 
 proc setFilename*(info: auto; fn: string) =
   info["filename"] = %* fn 
+
+if isMainModule:
+  qexInit()
+  let
+    lo = newLayout(@[8,8,8,8])
+    gc = GaugeActionCoeffs(plaq:6.0)
+  var 
+    u = lo.newGauge()
+    f = lo.newGauge()
+  u.random()
+  echo gc.topologicalCharge(u)
+  gc.topologicalForce(u,f)
+  qexFinalize()

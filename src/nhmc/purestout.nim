@@ -4,10 +4,10 @@ import utilityprocs
 
 type
   StoutLinks*[S] = ref object
-    nstout: int
-    stout: seq[StoutSmear[seq[S]]]
-    su: seq[seq[S]]
-    sf: seq[seq[S]]
+    nstout*: int
+    stout*: seq[StoutSmear[seq[S]]]
+    su*: seq[seq[S]]
+    sf*: seq[seq[S]]
 
 proc newStoutLinks[S](
     l: Layout,
@@ -30,7 +30,7 @@ proc newStoutLinks*(
     rho: float,
   ): auto = l.newStoutLinks(nstout,rho,type(l.newGauge()[0]))
 
-proc smear(self: StoutLinks; u: auto) =
+proc smear*(self: StoutLinks; u: auto) =
   self.su[0].setGauge(u)
   for idx in 0..<self.nstout:
     self.stout[idx].smear(self.su[idx],self.su[idx+1])
