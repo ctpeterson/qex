@@ -1,6 +1,7 @@
 import qex
-import sequtils, json, strutils, io
+import sequtils, json, strutils, io, sets
 import gauge
+import gauge/gaugeUtils
 
 proc reunit*(g:auto) =
   tic()
@@ -43,72 +44,173 @@ proc reTrMul(x,y:auto):auto =
   result = simdSum(d)
   x.l.threadRankSum(result)
 
-proc fmunu[S](u: seq[S]): seq[seq[S]] =
-  let
-    lo = u[0].l
-    nd = lo.nDim
-    t = newTransporters(u,u[0],1)
-  var fmunu = newSeq[seq[S]](nd)
-  for mu in 1..<nd: 
-    fmunu[mu] = newSeq[S](mu)
-    for nu in 0..<mu: fmunu[mu][nu] = lo.ColorMatrix()
-  threads:
-    for mu in 1..<nd:
-      for nu in 0..<mu: fmunu[mu][nu] := (t[mu]^*u[nu]) * (t[nu]^*u[mu]).adj
-  result = fmunu
+proc leviCivita(a,n,r,s: int): int =
+  var
+    idx = @[a,n,r,s]
+    swapCount = 0
+  let idxSet = idx.toSet
 
-proc sfmunu[S](fmunu: seq[seq[S]]): auto =
-  let
-    lo = fmunu[1][0].l
-    nd = lo.nDim
-  var sfmunu = newSeq[seq[S]](nd)
-  for mu in 1..<nd:
-    sfmunu[mu] = newSeq[S](mu)
-    for nu in 0..<mu:
-      sfmunu[mu][nu] = lo.ColorMatrix()
-      var t = newShifter(fmunu[mu][nu],nu,-1)
-      discard t ^* fmunu[mu][nu]
-      threads: 
-        sfmunu[mu][nu] := fmunu[mu][nu] + t.field[nu]
-  result = sfmunu
+  if idxSet.len != 4: return 0
 
-proc topologicalCharge*(gc: GaugeActionCoeffs; u: auto): float =
+  for idx1 in 0..<idx.len:
+    for idx2 in idx1+1..<idx.len:
+      if idx[idx1] > idx[idx2]:
+        let tmp = idx[idx1]
+        idx[idx1] = idx[idx2]
+        idx[idx2] = tmp
+        swapCount.inc
+
+  result = case (swapCount mod 2 == 0):
+    of true: 1
+    of false: -1
+
+proc topologicalAction*(gc: GaugeActionCoeffs; u: auto): float =
   let 
-    fmunu = u.fmunu
+    f = u.fmunu
     betaq = gc.plaq
-  var q: float
+  var action: float
   threads:
     let
-      a = reTrMul(fmunu[1][0], fmunu[3][2])
-      b = reTrMul(fmunu[2][0], fmunu[3][1])
-      c = reTrMul(fmunu[2][1], fmunu[3][0])
-    threadMaster: q = -betaq*(a-b+c)
-  result = q
+      a = reTrMul(f[1][0], f[3][2])
+      b = reTrMul(f[2][0], f[3][1])
+      c = reTrMul(f[2][1], f[3][0])
+    threadMaster: action = -betaq*(a-b+c)
+  result = action
+  echo "Topological action: ", result
 
-proc topologicalForce*(gc: GaugeActionCoeffs; u,f: auto) =
-  let 
-    fmunu = u.fmunu
-    sfmunu = fmunu.sfmunu
-    betaq = gc.plaq
-  threads:
-    for mu in 0..<f.len:
-      if mu == 0: f[mu] := betaq*fmunu[2][1]*fmunu[3][0]
-      elif mu == 1: f[mu] := -betaq*fmunu[1][0]*fmunu[3][2]
-      elif mu == 2: f[mu] := -betaq*fmunu[2][0]*fmunu[3][1]
-      elif mu == 3: f[mu] := -f[0]
-      f[mu].projectTAH(f[mu])
+proc topologicalDerivative*(
+    gc: GaugeActionCoeffs; 
+    u,f: auto; 
+    project: bool = false
+  ) =
+  # This code is ugly as can be, but it does the job
+  const
+    FWD =  1
+    BWD = -1
 
-proc topologicalDeriv*(gc: GaugeActionCoeffs; u,f: auto) =
-  let 
-    fmunu = u.fmunu
-    sfmunu = fmunu.sfmunu
-    betaq = gc.plaq
+  let
+    rrs = u.fmunu
+
+  var
+    uShift: Shifter[type(u[0]),type(u[0][0])]
+    rShift: Shifter[type(rrs[0][0]),type(rrs[0][0][0])]
+
+  var
+    up = newSeq[seq[type(uShift)]](u.len) # U_alpha/nu(n+nu/alpha)
+    un = newSeq[seq[type(uShift)]](u.len) # U_alpha/nu(n-nu/alpha)
+    upn = newSeq[seq[type(uShift)]](u.len) # U_alpha/nu(n+nu/alpha-alpha/nu)
+
+    rp = newSeq[seq[seq[type(rShift)]]](rrs.len) # R_{rho,sigma}(n+nu/alpha)
+    rn = newSeq[seq[seq[type(rShift)]]](rrs.len) # R_{rho,sigma}(n-nu/alpha)
+
+    rpp = newSeq[seq[seq[seq[type(rShift)]]]](rrs.len) # R_{rho,sigma}(n+alpha+nu)
+    rpn = newSeq[seq[seq[seq[type(rShift)]]]](rrs.len) # R_{rho,sigma}(n+alpha-nu)
+
+  # Single shifts
+  for a in 0..<u.len:
+    # Gauge field shifts
+    up[a] = newSeq[type(uShift)](u.len)
+    un[a] = newSeq[type(uShift)](u.len)
+    for n in 0..<u.len:
+      up[a][n] = newShifter(u[a],n,FWD)
+      un[a][n] = newShifter(u[a],n,BWD)
+      threads:
+        discard up[a][n] ^* u[a] # U_alpha/nu(n+nu/alpha)
+        discard un[a][n] ^* u[a] # U_alpha/nu(n-nu/alpha)
+
+    # Clover shifts
+    rp[a] = newSeq[seq[type(rShift)]](u.len-1)
+    rn[a] = newSeq[seq[type(rShift)]](u.len-1)
+    for r in 1..<rrs.len:
+      rp[a][r-1] = newSeq[type(rShift)](r)
+      rn[a][r-1] = newSeq[type(rShift)](r)
+      for s in 0..<r:
+        rp[a][r-1][s] = newShifter(rrs[r][s],a,FWD)
+        rn[a][r-1][s] = newShifter(rrs[r][s],a,BWD)
+        threads:
+          discard rp[a][r-1][s] ^* rrs[r][s] # R_{rho,sigma}(n+nu/alpha)
+          discard rn[a][r-1][s] ^* rrs[r][s] # R_{rho,sigma}(n-nu/alpha)
+
+  # Double shifts
+  for a in 0..<u.len:
+    upn[a] = newSeq[type(uShift)](u.len)
+    for n in 0..<u.len:
+      upn[a][n] = newShifter(up[a][n].field,a,BWD)
+      threads:
+        discard upn[a][n] ^* up[a][n].field # U_alpha/nu(n+nu/alpha-alpha/nu)
+    rpp[a] = newSeq[seq[seq[type(rShift)]]](u.len)
+    rpn[a] = newSeq[seq[seq[type(rShift)]]](u.len)
+    for n in 0..<u.len:
+      rpp[a][n] = newSeq[seq[type(rShift)]](u.len-1)
+      rpn[a][n] = newSeq[seq[type(rShift)]](u.len-1)
+      if n != a:
+        for r in 1..<rrs.len:
+          rpp[a][n][r-1] = newSeq[type(rShift)](r)
+          rpn[a][n][r-1] = newSeq[type(rShift)](r)
+          for s in 0..<r:
+            rpp[a][n][r-1][s] = newShifter(rp[a][r-1][s].field,n,FWD)
+            rpn[a][n][r-1][s] = newShifter(rp[a][r-1][s].field,n,BWD)
+            threads:
+              discard rpp[a][n][r-1][s] ^* rp[a][r-1][s].field # R_{r,s}(n+a+n)
+              discard rpn[a][n][r-1][s] ^* rp[a][r-1][s].field # R_{r,s}(n+a-n)
+
+  # Calculate A_{alpha,nu,rho,sigma}
   threads:
-    for mu in 0..<f.len:
-      if mu == 0: f[mu] := betaq*fmunu[2][1]*fmunu[3][0]
-      elif mu == 1: f[mu] := -betaq*fmunu[1][0]*fmunu[3][2]
-      elif mu == 2: f[mu] := -betaq*fmunu[2][0]*fmunu[3][1]
-      elif mu == 3: f[mu] := -f[0]
+    for a in 0..<u.len:
+      for n in 0..<u.len:
+        if n != a:
+          for r in 1..<u.len:
+            for s in 0..<r:
+              if (r != a) and (r != n) and (s != a) and (s != n):
+                let eps = gc.plaq*leviCivita(a,n,r,s).float/16.0
+                for st in u[0]:
+                  var 
+                    f1 {.noinit.}:  type(u[0][0])
+                    f11 {.noinit.}: type(u[0][0])
+                    f12 {.noinit.}: type(u[0][0])
+
+                    f2 {.noinit.}: type(u[0][0])
+                    f21 {.noinit.}: type(u[0][0])
+                    f22 {.noinit.}: type(u[0][0])
+
+                    f3 {.noinit.}: type(u[0][0])
+                    f31 {.noinit.}: type(u[0][0])
+
+                    fmat {.noinit.}: type(u[0][0])
+
+                  fmat := 0
+
+                  case project:
+                    of true: f21 := u[a][st] * upn[a][n].field[st].adj
+                    of false: f21 := upn[a][n].field[st].adj
+                  f11 :=  u[a][st]*up[n][a].field[st]
+                  f12 := (u[n][st]*up[a][n].field[st]).adj
+                  f1 := f12 * rrs[r][s][st]
+                  f1 += up[a][n].field[st].adj * rp[n][r-1][s].field[st] * u[n][st].adj
+                  f1 += rpp[a][n][r-1][s].field[st] * f12
+                  fmat += f11*f1
+
+                  case project:
+                    of true: f21 := u[a][st] * upn[a][n].field[st].adj
+                    of false: f21 := upn[a][n].field[st].adj
+                  f22 := un[a][n].field[st].adj * un[n][n].field[st]
+                  f2 := f22 * rrs[r][s][st]
+                  f2 += un[a][n].field[st].adj * rn[n][r-1][s].field[st] * un[n][n].field[st]
+                  f2 += rpn[a][n][r-1][s].field[st] * f22
+                  fmat -= f21*f2
+
+                  case project:
+                    of true: f31 := u[a][st] * rp[a][r-1][s].field[st]
+                    of false: f31 := rp[a][r-1][s].field[st]
+                  f3 := up[n][a].field[st] * f12
+                  f3 -= upn[a][n].field[st].adj * f22
+                  fmat += f31*f3
+
+                  threadBarrier()
+
+                  case project:
+                    of true: f[a][st].projectTAH(eps*fmat)
+                    of false: f[a][st] := eps*fmat
 
 proc setGauge*(u: auto; v: auto) =
   threads:
@@ -314,6 +416,12 @@ if isMainModule:
     u = lo.newGauge()
     f = lo.newGauge()
   u.random()
-  echo gc.topologicalCharge(u)
-  gc.topologicalForce(u,f)
+  echo "Levi-Civita 1234: ", leviCivita(1,2,3,4)
+  echo "Levi-Civita 2134: ", leviCivita(2,1,3,4)
+  echo "Levi-Civita 2143: ", leviCivita(2,1,4,3)
+  echo "Levi-Civita 4123: ", leviCivita(4,2,3,1)
+  echo "Levi-Civita 1123: ", leviCivita(1,1,2,3)
+  echo "action: ", gc.topologicalAction(u)
+  gc.topologicalDerivative(f,u)
+  for mu in 0..<f.len: echo "|f[",mu,"]|^2: ",f[mu].norm2
   qexFinalize()
