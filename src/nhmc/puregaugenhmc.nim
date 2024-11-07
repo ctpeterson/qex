@@ -1,5 +1,5 @@
 import qex, gauge, physics/qcdTypes, maths/groupOps, gauge/stoutsmear
-import math, os, sequtils, strformat, strutils, times, typetraits, json
+import math, os, sequtils, strformat, strutils, times, typetraits, json, tables
 import purestout, utilityprocs
 
 const 
@@ -26,8 +26,9 @@ type
     NActSymanzikStout, 
     NActIwasakiStout, 
     NActDBW2Stout,
-    NActPlaquetteCharge,
-    NActPlaquetteChargeStout
+    NActTopoClover,
+    NActTopoCloverStout,
+    NActTopoCloverStoutMeta
 
 type DAdjointVectorV = Color[VectorArray[dA,DComplexV]]
 var Ta = newSeq[Color[MatrixArray[nc,nc,DComplexV]]](dA)
@@ -62,11 +63,11 @@ qexinit()
 
 letParam:
   gact: GaugeActType = "ActWilson"
-  nact: NambuActType = "NActPlaquetteCharge"
+  nact: NambuActType = "NActTopoCloverStoutMeta"
   lat = @[8,8,8,8]
   beta = 9.0
   nBeta = 9.0
-  betaTopo = 9.0
+  betaTopo = 1.0
   betaQ = betaTopo/4.0/math.PI/math.PI
   adjFac = -0.25
   nAdjFac = -0.25
@@ -79,8 +80,16 @@ letParam:
   seed: uint64 = 987654321
   nstout = 3
   rho = 0.1
+  amplitude = 1.0
+  sdev = 5.0
   noMetropolisUntil = 10
-  
+
+var 
+  histogram = initTable[int,int]()
+  metaIter = 0
+
+if nact == NActTopoCloverStoutMeta: assert(betaTopo == 1.0)
+
 var  
   maxFlowTime = (0.5*lat[^1])*(0.5*lat[^1])/8.0
   flowInfo = %* {
@@ -107,7 +116,7 @@ let
     of NActSymanzik,NActSymanzikStout: Symanzik(nBeta)
     of NActIwasaki,NActIwasakiStout: Iwasaki(nBeta)
     of NActDBW2,NActDBW2Stout: DBW2(nBeta)
-    of NActPlaquetteCharge,NActPlaquetteChargeStout: 
+    of NActTopoClover,NActTopoCloverStout,NActTopoCloverStoutMeta: 
       GaugeActionCoeffs(plaq: betaQ)
 
 var
@@ -130,27 +139,50 @@ var
     of NActWilsonStout,NActRectStout: lo.newStoutLinks(nstout,rho)
     of NActSymanzikStout,NActIwasakiStout: lo.newStoutLinks(nstout,rho)
     of NActDBW2Stout: lo.newStoutLinks(nstout,rho)
+    of NActTopoCloverStout: lo.newStoutLinks(nstout,rho)
+    of NActTopoCloverStoutMeta: lo.newStoutLinks(nstout,rho)
     else: lo.newStoutLinks(0,0.0)
 
 R.seed(seed, 987654321)
 g.random
+
+proc sq(x: float): float = x*x
 
 proc action(): float =
   result = case gact
     of ActAdjoint: gc.actionA(g)
     else: gc.gaugeAction1(g)
 
-proc auxAction(): float =
+proc auxAction(append: bool = false): float =
   result = case nact
     of NActAdjoint: ngc.actionA(g)
-    of NActPlaquetteCharge: ngc.topologicalAction(g)
+    of NActTopoClover: ngc.topologicalAction(g)
     of NActWilsonStout,NActRectStout: ngc.smearedAction1(stout,g)
     of NActSymanzikStout,NActIwasakiStout: ngc.smearedAction1(stout,g)
     of NActDBW2Stout: ngc.smearedAction1(stout,g)
-    of NActPlaquetteChargeStout: 
+    of NActTopoCloverStout,NActTopoCloverStoutMeta: 
       stout.smear(g)
       ngc.topologicalAction(stout.su[^1])
     else: ngc.gaugeAction1(g)
+  case nact:
+    of NActTopoCloverStoutMeta:
+      var
+        qtaui: int 
+        qtauf: float
+      if metaIter > 0:
+        qtauf := result
+        result = 0.0
+        for (qtaup,count) in histogram.mpairs:
+          for sign in @[-1.0,1.0]: 
+            result += count.float*amplitude*exp(-0.5*sq(qtauf-sign*qtaup)/sdev)
+      else: result = amplitude
+      if append: 
+        qtaui = qtauf.round.abs.int
+        case histogram.hasKey(qtaui):
+          of true: histogram[qtaui] = histogram[qtaui] + 1
+          of false: histogram[qtaui] = 1
+        metaIter = metaIter + 1
+    else: discard
 
 proc updateMomentum(ui: auto; vi: auto; dtau: float) =
   threads:
@@ -162,17 +194,31 @@ proc updateMomentum(ui: auto; vi: auto; dtau: float) =
 proc nambuForce() =
   case nact:
     of NActAdjoint: ngc.forceA(g,f)
-    of NActPlaquetteCharge: ngc.topologicalDerivative(g,f,project=true)
+    of NActTopoClover: ngc.topologicalDerivative(g,f,project=true)
     of NActWilsonStout,NActRectStout: ngc.smearedGaugeForce(stout,g,f)
     of NActSymanzikStout,NActIwasakiStout: ngc.smearedGaugeForce(stout,g,f)
     of NActDBW2Stout: ngc.smearedGaugeForce(stout,g,f)
-    of NActPlaquetteChargeStout: 
+    of NActTopoCloverStout,NActTopoCloverStoutMeta: 
       stout.smear(g)
       for idx in countdown(stout.nstout,0):
         let xdi = stout.nstout - idx
         if xdi == 0: ngc.topologicalDerivative(stout.su[^1],stout.sf[^1])
         elif xdi == stout.nstout: stout.stout[idx].smearDeriv(f,stout.sf[1])
         else: stout.stout[idx].smearDeriv(stout.sf[idx],stout.sf[idx+1])
+      case nact:
+        of NActTopoCloverStoutMeta:
+          var 
+            gauss,diff: float
+            prefactor = 0.0
+            qtauf = ngc.topologicalAction(stout.su[^1])
+          for (qtaup,count) in histogram.mpairs:
+            for sign in @[-1.0,1.0]:
+              diff = qtauf-sign*qtaup
+              gauss = count.float*amplitude*exp(-0.5*sq(diff)/sdev) 
+              prefactor += -amplitude*gauss*diff/sdev
+          threads:
+            for mu in 0..<f.len: f[mu] *= prefactor
+        else: discard
       contractProjectTAH(g,f)
     else: ngc.gaugeForce(g,f)
   bf.setGauge(f)
@@ -219,8 +265,8 @@ proc hamiltonian(): float =
   let (pi2,qi2,s) = (0.5*pi.uiNorm2(),0.5*qi.uiNorm2(),action())
   result = pi2 + qi2 + s
 
-proc auxHamiltonian(): float =
-  let (qi2,s) = (0.5*qi.uiNorm2(),auxAction())
+proc auxHamiltonian(append: bool = false): float =
+  let (qi2,s) = (0.5*qi.uiNorm2(),auxAction(append = append))
   result = qi2 + s
 
 for traj in 0..<trajs:
@@ -231,7 +277,7 @@ for traj in 0..<trajs:
   pi.drawMomentum()
   qi.drawMomentum()
   
-  (hi,ahi) = (hamiltonian(),auxHamiltonian())
+  (hi,ahi) = (hamiltonian(),auxHamiltonian(append = true))
 
   for step in 0..<steps:
     if step == 0: updateU(0.5*stepSize)
@@ -253,7 +299,11 @@ for traj in 0..<trajs:
     else:
       echo "REJECT: dH: ", dH, " dG: ", adh
       g.setGauge(bg)
-  else: g.reunit
+  else: 
+    echo "ACCEPT (NO METROPOLIS): dH: ", dH, " dG: ", adh
+    if nact == NActTopoCloverStoutMeta: 
+      for (qtau,count) in histogram.mpairs: echo qtau,": ",count
+    g.reunit
 
   g.mplaq
   g.ploop

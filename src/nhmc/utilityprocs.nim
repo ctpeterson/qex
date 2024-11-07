@@ -44,6 +44,135 @@ proc reTrMul(x,y:auto):auto =
   result = simdSum(d)
   x.l.threadRankSum(result)
 
+proc allCorners(path:openarray[int]):seq[seq[int]] =
+  let np = path.len
+  result = newseq[seq[int]]()
+  var old = 0
+  for i,x in path.pairs:
+    if x!=old:
+      var p = newseq[int](np)
+      for j in 0..<np:
+        p[j] = path[(j+i) mod np]
+      result.add p
+      old = x
+  # echo "allCorners: ",result
+
+proc fmunuCoeffs_fun(loop:int):auto =
+  var k:array[5,float]
+  case loop
+  of 1:
+    return [1.0,0,0,0,0]
+  of 3:
+    k[4] = 1.0/90.0
+  of 4:
+    k[4] = 0.0
+  of 5:
+    k[4] = 1.0/180.0
+  else:
+    discard
+  k[0] = 19.0/9.0 - 55.0*k[4]
+  k[1] = 1.0/36.0 - 16.0*k[4]
+  k[2] = 64.0*k[4] - 32.0/45.0
+  k[3] = 1.0/15.0 - 6.0*k[4]
+  return k
+
+proc fmunuCoeffs(loop:int):auto =
+  const FmunuCoeffs =
+    [ fmunuCoeffs_fun(1)
+    , fmunuCoeffs_fun(3)
+    , fmunuCoeffs_fun(4)
+    , fmunuCoeffs_fun(5)
+    ]
+  case loop
+  of 1:
+    result = FmunuCoeffs[0]
+  of 3:
+    result = FmunuCoeffs[1]
+  of 4:
+    result = FmunuCoeffs[2]
+  of 5:
+    {.linearScanEnd.}
+    result = FmunuCoeffs[3]
+  else:
+    qexError("fmunuCoeffs uses loop in [1,3,4,5], but got ",loop)
+
+proc fmunuPTree_fun(mu,nu,loop:int):auto =
+  tic()
+  var lp = newseq[seq[int]]()
+  block:
+    let
+      mu = mu+1
+      nu = nu+1
+    lp.add allCorners @[-mu,-nu,mu,nu]  # 1x1
+    if loop>=3:
+      lp.add allCorners @[-mu,-mu,-nu,-nu,mu,mu,nu,nu]  # 2x2
+    if loop>=4:
+      lp.add allCorners @[-mu,-mu,-nu,mu,mu,nu]  # 2x1
+      lp.add allCorners @[-mu,-nu,-nu,mu,nu,nu]  # 1x2
+      lp.add allCorners @[-mu,-mu,-mu,-nu,mu,mu,mu,nu]  # 3x1
+      lp.add allCorners @[-mu,-nu,-nu,-nu,mu,nu,nu,nu]  # 1x3
+    if loop==3 or loop==5:
+      lp.add allCorners @[-mu,-mu,-mu,-nu,-nu,-nu,mu,mu,mu,nu,nu,nu]  # 3x3
+  result = lp.optimalPairs
+  toc("compute PTree")
+
+proc fmunuPTree(mu,nu,loop:int):auto =
+  const lps = [-1,0,-1,1,2,3]
+  let lp = lps[loop]
+  memoize(lp,mu,nu):
+    fmunuPTree_fun(mu,nu,loop)
+
+proc rmunu*(g:auto, mu,nu:int, loop=1):auto =
+  ## mu,nu: 0..<nd
+  ## loop: 1,3,4,5
+  ## returns the traceless antihermitian F_munu from the clover
+  tic("fmunu")
+  if loop notin [1,3,4,5]:
+    qexError("fmunu uses loop in [1,3,4,5], but got ",loop)
+  const lpc = [4,4,8,8,4]  # counts of distinct loops in order of 1x1, 2x2, 1x2, 1x3, 3x3
+  let cs = fmunuCoeffs loop
+  let ptree = fmunuPTree(mu,nu,loop)
+  toc("fmunuPTree")
+  let fs = g.gaugeProd ptree
+  toc("gaugeProd")
+  let 
+    f = newOneOf(fs[0])
+    r = newOneOf(fs[0])
+  threads:
+    f := 0
+    var i0 = 0
+    for jc in 0..<loop:
+      var j = jc
+      if loop==3 and jc==2:
+        j = 4
+      let n = lpc[j]
+      let ni = cs[j]/n.float
+      for ir in f:
+        var t:type(load1(f[0]))
+        for i in 0..<n:
+          t += fs[i0+i][ir]
+        f[ir] += ni*t
+      i0 += n
+    #f.projectTAH
+    threadBarrier()
+    r := 0.5*(f-f.adj)
+  toc("single fmunu")
+  return r
+
+proc rmunu*(g:auto, loop=1):auto =
+  ## loop: 1,3,4,5
+  ## returns the traceless antihermitian F[mu][nu] where mu>nu
+  tic("fmunu")
+  type F = type(g[0])
+  let nd = g[0].l.nDim
+  var f = newseq[seq[F]](nd)  # only partially initialized
+  for mu in 1..<nd:
+    f[mu].newseq(mu)
+    for nu in 0..<mu:
+      f[mu][nu] = g.fmunu(mu,nu,loop)
+  toc("fmunu tensor")
+  return f
+
 proc leviCivita(a,n,r,s: int): int =
   var
     idx = @[a,n,r,s]
@@ -66,7 +195,7 @@ proc leviCivita(a,n,r,s: int): int =
 
 proc topologicalAction*(gc: GaugeActionCoeffs; u: auto): float =
   let 
-    f = u.fmunu
+    f = u.rmunu
     betaq = gc.plaq
   var action: float
   threads:
@@ -76,7 +205,6 @@ proc topologicalAction*(gc: GaugeActionCoeffs; u: auto): float =
       c = reTrMul(f[2][1], f[3][0])
     threadMaster: action = -betaq*(a-b+c)
   result = action
-  echo "Topological action: ", result
 
 proc topologicalDerivative*(
     gc: GaugeActionCoeffs; 
@@ -89,7 +217,7 @@ proc topologicalDerivative*(
     BWD = -1
 
   let
-    rrs = u.fmunu
+    rrs = u.rmunu
 
   var
     uShift: Shifter[type(u[0]),type(u[0][0])]
