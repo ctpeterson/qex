@@ -1,6 +1,6 @@
 import threading
 export threading
-import comms/comms, stdUtils, base/basicOps
+import comms/comms, stdUtils, base/[basicOps,params]
 import os, strutils, sequtils, std/monotimes, std/tables, std/algorithm, strformat
 export monotimes
 getOptimPragmas()
@@ -20,7 +20,7 @@ var
 
 ##[
 
-Each Tic starts a local timer.  Each Toc records the time difference
+Each tic() starts a local timer.  Each toc() records the time difference
 of the current time with the one in the local timer visible in the
 scope, and then update the timer with the current time.
 
@@ -516,49 +516,10 @@ template tocI(f: SomeNumber; s:SString = ""; n = -1) =
       localCode {.global.} = newList[CodePoint]()
       thisCode = CodePoint(-1)
   if threadNum==0:
-    when false:
-      #echo "==== begin toc ",s," ",ii
-      #echo "     rtiStack: ",indent($rtiStack,5)
-      #echo "     cpHeap: ",indent($cpHeap,5)
-      if unlikely VerboseTimer: echoToc(s,ii)
-      if prevRTI.int32 >= 0:
-        if restartTimer:
-          thawTimers()
-          restartTimer = false
-        if not timersFrozen():
-          let theTime = getTics()
-          when not cname:
-            for c in items(localCode):
-              if cpHeap[c.int].name.equal(s):
-                thisCode = c
-                break
-          if thisCode.isNil:
-            thisCode = newCodePoint(ii.addr, s)
-            when not cname:
-              localCode.add thisCode
-          let
-            ns = theTime-localTimer
-            thisRTI = record(localTic, prevRTI, thisCode, ns, float(f))
-          var oh = rtiStack[thisRTI.int].childrenOverhead
-          let c = rtiStack[thisRTI.int].children
-          for i in 0..<c.len:
-            if toDropTimer(c[i].prev):
-              oh -= c[i].childrenOverhead
-          if oh.float / ns.float > DropWasteTimerRatio:
-            # Signal stop if the overhead is too large.
-            dropTimer(prevRTI)
-          if toDropTimer(thisCode):
-            freezeTimers()
-            restartTimer = true
-          localTimer = getTics()
-          rtiStack[thisRTI.int].overhead = nsec(localTimer-theTime)
-          prevRTI = thisRTI
-      #echo "==== end toc ",s," ",ii
+    when cname:
+      tocSet(localTimer,prevRTI,restartTimer,thisCode,f,s,ii.addr,localTic,false)
     else:
-      when cname:
-        tocSet(localTimer,prevRTI,restartTimer,thisCode,f,s,ii.addr,localTic,false)
-      else:
-        tocSet(localTimer,prevRTI,restartTimer,thisCode,f,s,ii.addr,localTic,addr localCode)
+      tocSet(localTimer,prevRTI,restartTimer,thisCode,f,s,ii.addr,localTic,addr localCode)
 
 when noTicToc:
   template toc*() = discard
@@ -822,7 +783,7 @@ proc makeHotspotTable(lrti: List[RTInfoObj]): tuple[ns:int64,oh:int64] =
           t.children.add ri.children[i]
     do: # loc not found
       hs[loc] = ri
-    #let tot = makeHotSpotTable(List[RTInfoObj](ri.children))
+    let tot = makeHotSpotTable(List[RTInfoObj](ri.children))
   return (nstot, ohtot)
 
 proc echoHotspots* =
@@ -878,6 +839,12 @@ proc echoHotspots* =
         tsns += nk.ns
         let tsnspct = 100.0 * tsns / nstot
         echo &"{pct:6.3f} {tsnspct:7.3f} {count} {mf} {nc} S {lc} {nm}"
+
+proc echoProf*(def = 0) =
+  case intParam("prof",def)
+  of 1: echoHotspots()
+  of 2: echoTimers()
+  else: discard
 
 when isMainModule:
   import os

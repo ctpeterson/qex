@@ -63,7 +63,7 @@ threads:
   threadBarrier()
   echo r.norm2
 #echo v2
-echoTimers()
+echoProf()
 
 var g3:array[8,type(g[0])]
 for i in 0..3:
@@ -76,6 +76,6 @@ var s3 = newStag3(g3)
 s3.solve(v2, v1, mass, sp)
 resetTimers()
 s3.solve(v2, v1, mass, sp)
-echoTimers()
+echoProf()
 
 qexFinalize()
