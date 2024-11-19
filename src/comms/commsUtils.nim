@@ -1,9 +1,10 @@
-import base/[threading,metaUtils,stdUtils]
+import base/[threading,metaUtils,stdUtils,basicOps,profile]
 import times
 import os
 import macros
 #import strUtils
 import comms/comms
+getOptimPragmas()
 
 proc evalArgs*(call:var NimNode; args:NimNode):NimNode =
   result = newStmtList()
@@ -218,6 +219,7 @@ template rankSum*(a:varargs[untyped]) =
   let comm = getDefaultComm()
   comm.rankSum(a)
 
+#[
 #var count = 0
 template threadRankSum1*[T](comm: Comm, a: T) =
   mixin rankSum
@@ -257,7 +259,6 @@ template threadRankSum1*[T](comm: Comm, a: T) =
     toc("t0wait")
     for i in 1..<numThreads:
       a += cast[ptr type(a)](threadLocals.share[i].p)[]
-      #a += ta2[threadNum]
     toc("sum")
     rankSum(comm,a)
     toc("rankSum")
@@ -265,11 +266,25 @@ template threadRankSum1*[T](comm: Comm, a: T) =
     twait0()
     toc("twait0")
   else:
-    threadLocals.share[threadNum].p = a.addr
+    threadAtomicWrite:
+      threadLocals.share[threadNum].p = a.addr
     #ta2[threadNum] = a
     t0wait()
     twait0()
     a = ta
+]#
+
+#template threadRankSum1x*[T](comm: Comm, a: T) =
+proc threadRankSum1x*[T](comm: Comm, a: var T) =
+  mixin rankSum
+  tic("threadRankSum1x")
+  threadSum0(a)
+  toc("threadSum0")
+  if threadNum==0:
+    rankSum(comm,a)
+  toc("rankSum")
+  threadBroadcast(a)
+  toc("threadBroadcast")
 
 #[
 proc threadRankSumN*(comm: Comm, a: NimNode): auto =
@@ -336,11 +351,10 @@ template threadRankSum*(a:varargs[untyped]) =
 #template threadRankSum*(a:typed):auto =
 
 template threadRankSum*(c: Comm, a: typed) =
-  threadRankSum1(c, a)
+  threadRankSum1x(c, a)
 template threadRankSum*(a: typed) =
   let comm = getDefaultComm()
-  threadRankSum1(comm, a)
-
+  threadRankSum1x(comm, a)
 
 macro rankMax*(a:varargs[untyped]):auto =
   if a.len==1:
@@ -357,16 +371,20 @@ template threadRankMax1*(a:untyped):untyped =
   var ta{.global.}:type(a)
   if threadNum==0:
     t0wait()
+    #threadBarrier()
     for i in 1..<numThreads:
       let c = cast[ptr type(a)](threadLocals.share[i].p)[]
       if a < c: a = c
     rankMax(a)
     ta = a
     twait0()
+    #threadBarrier()
   else:
     threadLocals.share[threadNum].p = a.addr
     t0wait()
+    #threadBarrier()
     twait0()
+    #threadBarrier()
     a = ta
 
 macro threadRankMax*(a:varargs[untyped]):auto =

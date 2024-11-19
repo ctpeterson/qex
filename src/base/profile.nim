@@ -787,6 +787,7 @@ proc makeHotspotTable(lrti: List[RTInfoObj]): tuple[ns:int64,oh:int64] =
   return (nstot, ohtot)
 
 proc echoHotspots* =
+  hs.clear
   let tot = makeHotspotTable(rtiStack)
   #let nstot = tot.ns
   let ohtot = tot.oh
