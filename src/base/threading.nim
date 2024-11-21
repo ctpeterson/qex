@@ -5,15 +5,18 @@ import macros
 import omp
 import metaUtils
 import base/basicOps
+import bitops
 getOptimPragmas
 
 type
   ThreadShare* = object
     p*:pointer
     counter*:int
+    extra*:int
   ThreadObj* = object
     threadNum*:int
     numThreads*:int
+    #counter*: int
     share*:ptr cArray[ThreadShare]
 
 var threadNum*{.threadvar.}:int
@@ -209,8 +212,29 @@ template t0waitA* =
       let t = threadLocals.share[threadNum].counter + 1
       ompAtomicWrite:
         threadLocals.share[threadNum].counter = t
-template t0wait* = t0waitA()
+template t0waitC* =
+  if numThreads > 1:
+    if threadNum==0:
+      inc threadLocals.share[0].counter
+      let tbar0 = threadLocals.share[0].counter
+      var left = numThreads - 1
+      for i in 1..<numThreads: threadLocals.share[i].extra = 1
+      while left > 0:
+        for i in 1..<numThreads:
+          if threadLocals.share[i].extra > 0:
+            let p = threadLocals.share[i].counter.addr
+            var t {.noInit.}: type(p[])
+            ompAtomicRead: t = p[]
+            if t >= tbar0:
+              threadLocals.share[i].extra = 0
+              dec left
+    else:
+      let t = threadLocals.share[threadNum].counter + 1
+      ompAtomicWrite:
+        threadLocals.share[threadNum].counter = t
+#template t0wait* = t0waitA()
 #template t0wait* = t0waitB()
+template t0wait* = t0waitC()
 
 template twait0B* = threadBarrier()
 template twait0A* =
@@ -244,10 +268,10 @@ template threadBarrierA* =
 template threadBarrier* = threadBarrierA
 #template threadBarrier* = ompBarrier
 
-template threadSum01A*[T](a: T) =
+template threadSum01A0*[T](a: T) =
   ## sum value with result on thread 0, atomic version
   if threadNum==0:
-    tic("threadSum01A")
+    tic("threadSum01A0")
     t0wait()
     toc("t0wait")
     for i in 1..<numThreads:
@@ -262,6 +286,33 @@ template threadSum01A*[T](a: T) =
     threadAtomicWrite:
       threadLocals.share[threadNum].p = a.addr
     t0wait()
+    twait0()
+
+template threadSum01A*[T](a: T) =
+  ## sum value with result on thread 0, atomic version
+  if threadNum==0:
+    tic("threadSum01A")
+    inc threadLocals.share[0].counter
+    let tbar0 = threadLocals.share[0].counter
+    for b in 1..<numThreads:
+      let pc = threadLocals.share[b].counter.addr
+      while true:
+        var t {.noInit.}: type(pc[])
+        ompAtomicRead: t = pc[]
+        if t >= tbar0: break
+      var p{.noInit.}: pointer
+      threadAtomicRead:
+        p = threadLocals.share[b].p
+      a += cast[ptr T](p)[]
+    toc("sum")
+    twait0()
+    toc("twait0")
+  else:
+    threadAtomicWrite:
+      threadLocals.share[threadNum].p = a.addr
+    let t = threadLocals.share[threadNum].counter + 1
+    threadAtomicWrite:
+      threadLocals.share[threadNum].counter = t
     twait0()
 
 template threadSum01B*[T](a: T) =
@@ -279,15 +330,53 @@ template threadSum01B*[T](a: T) =
     threadBarrier()
     toc("threadBarrier last")
 
+template threadSum01T*[T](a: T) =
+  ## sum value with result on thread 0, tree version
+  threadAtomicWrite:
+    threadLocals.share[threadNum].p = a.addr
+  var c = threadLocals.share[threadNum].counter
+  var done = false
+  var b = 1
+  while b < numThreads:
+    inc c
+    if not done:
+      let o = bitxor(threadNum, b)
+      if bitand(threadNum, b) == 0:
+        if o < numThreads:
+          while true:
+            var d{.noInit.}: int
+            threadAtomicRead:
+              d = threadLocals.share[o].counter
+            if d >= c: break
+          var p{.noInit.}: pointer
+          threadAtomicRead:
+            p = threadLocals.share[o].p
+          a += cast[ptr T](p)[]
+        threadAtomicWrite:
+          threadLocals.share[threadNum].counter = c
+      else:
+        threadAtomicWrite:
+          threadLocals.share[threadNum].counter = c
+        while true:
+          var d{.noInit.}: int
+          threadAtomicRead:
+            d = threadLocals.share[o].counter
+          if d >= c: break
+        done = true
+    else:
+      threadLocals.share[threadNum].counter = c
+    b *= 2
+
 template threadSum01*(a: auto) = threadSum01A(a)
 #template threadSum01*(a: auto) = threadSum01B(a)
+#template threadSum01*(a: auto) = threadSum01T(a)
 template threadSum0*(a: auto) = threadSum01(a)
 
 # threadMax0 FIXME
 
 template threadBroadcast1A*[T](a: T) =
   if threadNum==0:
-    tic("threadRankSum1")
+    tic("threadBroadcast1A")
     threadAtomicWrite:
       threadLocals.share[0].p = a.addr
     twait0()

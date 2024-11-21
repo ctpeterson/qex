@@ -71,6 +71,8 @@ for i in 0..3:
   g3[2*i+1] = lo.ColorMatrix()
   g3[2*i+1].randomSU rs
   g3[2*i+1] *= 0.1
+for i in 0..<g3.len:
+  echo &"g3[{i}]2: {g3[i].norm2}"
 var s3 = newStag3(g3)
 #s3.D(v2, v1, m)
 s3.solve(v2, v1, mass, sp)

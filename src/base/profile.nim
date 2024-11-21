@@ -15,7 +15,8 @@ template ticDiffSecs*(x,y: TicType): float = 1e-9 * float(x.int64 - y.int64)
 template `-`*(x,y: TicType): TicType = TicType(x.int64 - y.int64)
 
 var
-  DropWasteTimerRatio* = 0.05  ## Drop children timers if the proportion of their overhead is larger than this.
+  ## Drop children timers if the proportion of their overhead is larger than this.
+  DropWasteTimerRatio* = floatParam("dropRatio", 0.05)
   VerboseTimer* = false  ## If true print out all the timers during execution.
 
 ##[
