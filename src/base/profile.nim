@@ -1,6 +1,6 @@
 import threading
 export threading
-import comms/comms, stdUtils, base/[basicOps,params]
+import comms/commsEcho, stdUtils, base/[basicOps,params]
 import os, strutils, sequtils, std/monotimes, std/tables, std/algorithm, strformat
 export monotimes
 getOptimPragmas()
