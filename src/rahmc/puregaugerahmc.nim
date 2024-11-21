@@ -22,7 +22,7 @@ let gact = ActSymanzik
 var gamma: float
 
 letParam:
-  lat = @[8,8,8,8]
+  lat = @[16,16,16,16]
   beta = 4.7
   adjFac = -0.25
   nAdjFac = -0.25
@@ -31,12 +31,12 @@ letParam:
   hmcSteps = 100
   rahmcSteps = 100
   rahmcTrajLenScaleFac = 20.0
-  trajs = 100
+  trajs = 500
   hmcStepSize = tau/hmcSteps
   rahmcStepSize = tau/rahmcSteps/rahmcTrajLenScaleFac
   seed: uint64 = 987654321
-  noMetropolisUntil = 10
-  hmcUntil = 10
+  noMetropolisUntil = 20
+  hmcUntil = 40
 
 let
   gc = case gact
@@ -61,6 +61,17 @@ var
 
 R.seed(seed, 987654321)
 g.unit
+
+var
+  maxFlowTime = (0.5*lat[^1])*(0.5*lat[^1])/8.0
+  flowInfo = %* {
+    "C0p0": {
+      "action": "Wilson",
+      "path": "./",
+      "time-increments": [0.02,0.1],
+      "maximum-flow-times": [5.0,maxFlowTime]
+    }
+  }
 
 # ---------------------
 
@@ -180,6 +191,12 @@ for traj in 0..<trajs:
 
   g.mplaq
   g.ploop
+
+  let filename = "C0p0_" & $(traj) & ".log"
+  flowInfo["C0p0"].setFilename(filename)
+  g.gradientFlow(flowInfo):
+    let output = measurements.formatMeasurements(style="KS_nHYP_FA")
+    f.write(output & "\n")
 
 
 qexFinalize()
