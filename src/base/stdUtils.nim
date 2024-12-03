@@ -56,6 +56,13 @@ proc `|`*(f: float, d: int): string =
 template `|-`*(x:SomeNumber, y: int): auto =
   x | -y
 
+proc values*(e: typedesc[enum]): string =
+  result = ""
+  var sep = ""
+  for v in e:
+    result &= sep & $v
+    sep = " "
+
 proc indexOf*[T](x: openArray[T], y: auto): int =
   let n = x.len
   while result<n and x[result]!=y: inc result

@@ -318,7 +318,7 @@ template threadSum01A*[T](a: T) =
 template threadSum01B*[T](a: T) =
   ## sum value with result on thread 0, barrier version
   block:
-    tic("threadSum01")
+    tic("threadSum01B")
     if threadNum!=0:
       threadLocals.share[threadNum].p = a.addr
     threadBarrier()

@@ -9,6 +9,8 @@ import os
 import rng
 
 qexInit()
+installHelpParam()
+processHelpParam()
 #var defaultLat = [4,4,4,4]
 #var defaultLat = [8,8,8,8]
 var defaultLat = @[8,8,8,8]
@@ -81,3 +83,4 @@ s3.solve(v2, v1, mass, sp)
 echoProf()
 
 qexFinalize()
+finalizeParams()
