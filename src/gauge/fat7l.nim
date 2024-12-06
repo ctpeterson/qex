@@ -1,10 +1,6 @@
 import base
 import layout
-#import gauge
-#import strUtils
-
-type PerfInfo* = object
-  flops*: float
+export PerfInfo
 
 type Fat7lCoefs* = object
   oneLink*: float
@@ -168,6 +164,10 @@ proc makeImpLinks*(info: var PerfInfo, fl: auto, gf: auto, coef: auto,
   #info.final_flop = nflop*QDP_sites_on_node;
   #info.status = QOP_SUCCESS;
   toc()
+  inc info.count
+  info.flops += nflop * gf[0].l.localGeom.prod
+  info.secs += getElapsedTime()
+
 proc makeImpLinks*(info: var PerfInfo, fl: auto, gf: auto, coef: auto) =
   makeImpLinks(info, fl, gf, coef, fl, gf, 0.0)
 

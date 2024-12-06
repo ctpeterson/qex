@@ -292,9 +292,8 @@ proc fat7lderiv(perf: var PerfInfo, gauge: auto, deriv: auto,
   #info->status = QOP_SUCCESS;
 
 when isMainModule:
-  import qex
-  import physics/qcdTypes
-  import gauge
+  import qex, physics/qcdTypes
+  import strformat
   qexInit()
   #var defaultGaugeFile = "l88.scidac"
   let defaultLat = @[8,8,8,8]
@@ -324,7 +323,9 @@ when isMainModule:
   echo g.plaq
   echo g2.plaq
   makeImpLinks(info, fl, g, coef)
+  echo info
   makeImpLinks(info, fl2, g2, coef)
+  echo info
   echo fl.plaq
   echo fl2.plaq
   #echo ll.plaq
@@ -335,6 +336,7 @@ when isMainModule:
   #echo pow(1.0+6.0+6.0*4.0+6.0*4.0*2.0+6.0,4)/6.0
 
   fat7lderiv(info, g, fd, coef, dg)
+  echo info
   for mu in 0..3:
     dfl[mu] := fl2[mu] - fl[mu]
     echo dfl[mu].norm2

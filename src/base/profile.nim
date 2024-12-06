@@ -7,6 +7,22 @@ getOptimPragmas()
 
 const noTicToc {.boolDefine.} = false
 
+type PerfInfo* = object
+  count*: int
+  flops*: float
+  secs*: float
+template clear*(pi: var PerfInfo) =
+  pi.count = 0.0
+  pi.flops = 0.0
+  pi.secs = 0.0
+template `+=`*(r: var PerfInfo, x: PerfInfo) =
+  r.count += x.count
+  r.flops += x.flops
+  r.secs += x.secs
+proc `$`*(pi: PerfInfo): string =
+  result = system.`$`(pi)
+  result &= &" {1e-9*pi.flops/pi.secs:.2f} Gflops"
+
 type TicType* = distinct int64
 template getTics*: TicType = TicType(getMonoTime().ticks)
 template nsec*(t:TicType):int64 = int64(t)
