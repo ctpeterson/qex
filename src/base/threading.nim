@@ -460,6 +460,18 @@ macro threadSum2*(a:varargs[untyped]):auto =
   result.add(m)
   #echo result.treeRepr
 
+type ThreadSingle*[T] = distinct T
+template `[]`*[T](x: ThreadSingle[T]): auto = T(x)
+template `[]=`*[T](x: ThreadSingle[T], y: auto): auto =
+  T(x) = y
+template `=`*(x: var ThreadSingle, y: auto) =
+  threadSingle:
+    x[] = y
+template `+=`*(x: var ThreadSingle, y: auto) =
+  threadSingle:
+    x[] += y
+converter fromThreadSingle*[T](x: ThreadSingle[T]): T = T(x)
+
 when isMainModule:
   threadsInit()
   echo threadNum, "/", numThreads

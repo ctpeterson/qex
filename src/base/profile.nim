@@ -12,7 +12,7 @@ type PerfInfo* = object
   flops*: float
   secs*: float
 template clear*(pi: var PerfInfo) =
-  pi.count = 0.0
+  pi.count = 0
   pi.flops = 0.0
   pi.secs = 0.0
 template `+=`*(r: var PerfInfo, x: PerfInfo) =
