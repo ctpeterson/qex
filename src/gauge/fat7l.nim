@@ -68,8 +68,9 @@ proc computeGenStaple(staple: auto, mu,nu: int, link: auto, coef: float,
   #if(link!=gauge[mu]) QDP_discard_M(ts0);
   #QDP_discard_M(ts2);
 
-proc makeImpLinks*(info: var PerfInfo, fl: auto, gf: auto, coef: auto,
-                   ll: auto, gfLong: auto, naik: auto) =
+proc makeImpLinks*(fl: auto, gf: auto, coef: auto,
+                   ll: auto, gfLong: auto, naik: auto,
+                   info: var PerfInfo) =
   tic()
   type lcm = type(gf[0])
   proc QDP_create_M(): lcm = result.new(gf[0].l)
@@ -168,8 +169,8 @@ proc makeImpLinks*(info: var PerfInfo, fl: auto, gf: auto, coef: auto,
   info.flops += nflop * gf[0].l.localGeom.prod
   info.secs += getElapsedTime()
 
-proc makeImpLinks*(info: var PerfInfo, fl: auto, gf: auto, coef: auto) =
-  makeImpLinks(info, fl, gf, coef, fl, gf, 0.0)
+proc makeImpLinks*(fl: auto, gf: auto, coef: auto, info: var PerfInfo) =
+  makeImpLinks(fl, gf, coef, fl, gf, 0.0, info)
 
 when isMainModule:
   import qex
@@ -196,8 +197,8 @@ when isMainModule:
   var g3 = g
 
   echo g.plaq
-  makeImpLinks(info, fl, g, coef)
-  makeImpLinks(info, fl, g, coef, ll, g3, naik)
+  makeImpLinks(fl, g, coef, info)
+  makeImpLinks(fl, g, coef, ll, g3, naik, info)
   echo fl.plaq
   echo ll.plaq
   echo pow(1.0,4)/6.0

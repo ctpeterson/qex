@@ -119,8 +119,9 @@ side_force(QDP_ColorMatrix *force, QDP_ColorMatrix *bot0, QDP_ColorMatrix *side0
 }
 ]#
 
-proc fat7lderiv(perf: var PerfInfo, gauge: auto, deriv: auto,
-                coef: Fat7lCoefs, mid: auto) =
+proc fat7lDeriv(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
+                llderiv: auto, llgauge: auto, llmid: auto, naik: float,
+                perf: var PerfInfo) =
   tic()
   var nflops = 0
   let coefL = coef.lepage
@@ -287,9 +288,49 @@ proc fat7lderiv(perf: var PerfInfo, gauge: auto, deriv: auto,
       deriv[mu] += fixL * stpl5
     nflops += 4*(3*(2*198+3*18)+198+216+36)
 
+  if naik!=0.0:
+    for mu in 0..3:
+      # force += mid * Umumu' * Umu'
+      # force -= U-mu' * mid-mu * Umu'
+      # force += U-mu' * U-mu-mu' * mid-mu-mu
+      #QDP_M_eq_M(Uf, U, QDP_all);
+      #QDP_M_eq_sM(Umu, Uf, QDP_neighbor[mu], QDP_forward, QDP_all);
+      discard s1a[mu] ^* llgauge[mu]
+      #QDP_M_eq_Ma_times_M(Umid, Uf, mid, QDP_all);
+      tm1 := llgauge[mu].adj * llmid[mu]
+      #QDP_M_eq_sM(Umidbmu, Umid, QDP_neighbor[mu], QDP_backward, QDP_all);
+      discard sm1[mu] ^* tm1
+      #QDP_M_eq_Ma_times_Ma(UmuU, Umu, Uf, QDP_all);
+      tm2 := s1a[mu].field.adj * llgauge[mu].adj
+      #QDP_M_eq_sM(UmuUs, UmuU, QDP_neighbor[mu], QDP_forward, QDP_all);
+      discard s1b[mu] ^* tm2
+      #QDP_M_eq_Ma_times_M(f3b, Uf, Umidbmu, QDP_all);
+      llderiv[mu] += naik*(sm1[mu].field*s1a[mu].field.adj)
+      tm1 := llgauge[mu].adj * sm1[mu].field
+      #QDP_M_eq_sM(f3, f3b, QDP_neighbor[mu], QDP_backward, QDP_all);
+      discard sm1[mu] ^* tm1
+      #QDP_M_eq_M_times_M(f, mid, UmuUs, QDP_all);
+      #QDP_discard_M(UmuUs);
+      #QDP_M_peq_M_times_Ma(f, Umidbmu, Umu, QDP_all);
+      #QDP_discard_M(Umidbmu);
+      #QDP_discard_M(Umu);
+      #QDP_M_peq_M(f, f3, QDP_all);
+      #QDP_discard_M(f3);
+      #QDP_M_peq_r_times_M(deriv[mu], &coefN, f, QDP_all);
+      llderiv[mu] += naik*(llmid[mu]*s1b[mu].field+sm1[mu].field)
+
   #info->final_sec = QOP_time() - dtime;
   #info->final_flop = nflops*QDP_sites_on_node;
   #info->status = QOP_SUCCESS;
+  toc()
+  inc perf.count
+  perf.flops += nflops * gauge[0].l.localGeom.prod
+  perf.secs += getElapsedTime()
+
+proc fat7lDeriv(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
+                perf: var PerfInfo) =
+  fat7lDeriv(deriv, gauge, mid, coef, deriv, gauge, mid, 0.0, perf)
+
 
 when isMainModule:
   import qex, physics/qcdTypes
@@ -308,13 +349,17 @@ when isMainModule:
   coef.fiveStaple = 1.0
   coef.sevenStaple = 1.0
   coef.lepage = 1.0
+  var naik = 1.0
 
   var fl = lo.newGauge()
   var fl2 = lo.newGauge()
+  var ll = lo.newGauge()
+  var ll2 = lo.newGauge()
   var dfl = lo.newGauge()
   var g2 = lo.newGauge()
   var dg = lo.newGauge()
   var fd = lo.newGauge()
+  var ld = lo.newGauge()
   for mu in 0..<dg.len:
     dg[mu] := 0.00001 * g[mu]
     g2[mu] := g[mu] + dg[mu]
@@ -322,9 +367,9 @@ when isMainModule:
 
   echo g.plaq
   echo g2.plaq
-  makeImpLinks(info, fl, g, coef)
+  makeImpLinks(fl, g, coef, info)
   echo info
-  makeImpLinks(info, fl2, g2, coef)
+  makeImpLinks(fl2, g2, coef, info)
   echo info
   echo fl.plaq
   echo fl2.plaq
@@ -335,13 +380,30 @@ when isMainModule:
   #echo pow(1.0+6.0+6.0*4.0+6.0*4.0*2.0,4)/6.0
   #echo pow(1.0+6.0+6.0*4.0+6.0*4.0*2.0+6.0,4)/6.0
 
-  fat7lderiv(info, g, fd, coef, dg)
+  fat7lderiv(fd, g, dg, coef, info)
   echo info
   for mu in 0..3:
     dfl[mu] := fl2[mu] - fl[mu]
-    echo dfl[mu].norm2
-    echo fd[mu].norm2
+    #echo dfl[mu].norm2
+    #echo fd[mu].norm2
     dfl[mu] -= fd[mu]
+    echo dfl[mu].norm2
+
+  for mu in 0..<dg.len:
+    fd[mu] := 0
+    ld[mu] := 0
+  makeImpLinks(fl, g, coef, ll, g, naik, info)
+  makeImpLinks(fl2, g2, coef, ll2, g2, naik, info)
+  fat7lderiv(fd, g, dg, coef, ld, g, dg, naik, info)
+  echo info
+  for mu in 0..3:
+    dfl[mu] := fl2[mu] - fl[mu]
+    #echo dfl[mu].norm2
+    #echo fd[mu].norm2
+    dfl[mu] -= fd[mu]
+    echo dfl[mu].norm2
+    dfl[mu] := ll2[mu] - ll[mu]
+    dfl[mu] -= ld[mu]
     echo dfl[mu].norm2
 
   qexFinalize()
