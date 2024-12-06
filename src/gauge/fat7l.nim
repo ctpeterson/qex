@@ -13,6 +13,11 @@ type Fat7lCoefs* = object
   sevenStaple*: float
   lepage*: float
 
+#type Fat7lState*[I,O] = object
+#  coefs*: Fat7lCoefs
+#  in*: I
+#  out*: O
+
 proc `$`*(c: Fat7lCoefs): string =
   result  = "oneLink:     " & $c.oneLink & "\n"
   result &= "threeStaple: " & $c.threeStaple & "\n"
