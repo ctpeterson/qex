@@ -4,121 +4,6 @@ import base/profile, layout
 let STAPLE_FLOPS = 3*198+216+18
 let SIDE_FORCE_FLOPS = 7*198+3*216+3*18
 
-#[
-proc staple(auto out, auto in0, auto link0, int mu, int nu) =
-#define link     ftmp0[0]
-#define linkmu   ftmp[0][mu]
-#define in       ftmp0[1]
-#define innu     ftmp[1][nu]
-#define linkin   mtmp[0]
-#define back     btmp0[0]
-#define backnu   btmp[0][nu]
-#define linkinnu mtmp[1]
-
-  QDP_M_eq_M(link, link0, QDP_all);
-  QDP_M_eq_sM(linkmu, link, QDP_neighbor[mu], QDP_forward, QDP_all);
-  QDP_M_eq_M(in, in0, QDP_all);
-  QDP_M_eq_sM(innu, in, QDP_neighbor[nu], QDP_forward, QDP_all);
-  QDP_M_eq_Ma_times_M(linkin, link, in, QDP_all);
-  QDP_M_eq_M_times_M(back, linkin, linkmu, QDP_all);
-  QDP_M_eq_sM(backnu, back, QDP_neighbor[nu], QDP_backward, QDP_all);
-  QDP_M_eq_M_times_M(linkinnu, link, innu, QDP_all);
-  QDP_discard_M(innu);
-  QDP_M_peq_M_times_Ma(out, linkinnu, linkmu, QDP_all);
-  QDP_discard_M(linkmu);
-  QDP_M_peq_M(out, backnu, QDP_all);
-  QDP_discard_M(backnu);
-#define STAPLE_FLOPS (3*198+216+18)
-
-#undef link
-#undef linkmu
-#undef in
-#undef innu
-#undef linkin
-#undef back
-#undef backnu
-#undef linkinnu
-}
-]#
-
-#[
-static void
-side_force(QDP_ColorMatrix *force, QDP_ColorMatrix *bot0, QDP_ColorMatrix *side0,
-           QDP_ColorMatrix *top0, int mu, int nu, QDP_ColorMatrix *stpl)
-{
-#define side     ftmp0[0]
-#define sidemu   ftmp[0][mu]
-#define top      ftmp0[1]
-#define topnu    ftmp[1][nu]
-#define bot      ftmp0[2]
-#define botnu    ftmp[2][nu]
-#define sidebot  mtmp[0]
-#define sidetop  mtmp[1]
-#define topnusidebot  btmp0[0]
-#define fbmu          btmp[0][mu]
-#define botnusidetop  btmp0[1]
-#define fmbmu         btmp[1][mu]
-#define sidebotsidemu btmp0[2]
-#define stm           btmp[2][nu]
-#define botnusidemu   mtmp[2]
-#define botsidemu     mtmp[3]
-
-  // force += bot * sidemu * topnu+
-  // force -= bot-mu+ * side-mu * topnu-mu
-  // -= top <-> bot
-  // stpl += side * botnu * sidemu+
-  // stpl += side-nu+ * bot-nu * sidemu-nu
-  QDP_M_eq_M(side, side0, QDP_all);
-  QDP_M_eq_sM(sidemu, side, QDP_neighbor[mu], QDP_forward, QDP_all);
-  QDP_M_eq_M(top, top0, QDP_all);
-  QDP_M_eq_sM(topnu, top, QDP_neighbor[nu], QDP_forward, QDP_all);
-  QDP_M_eq_M(bot, bot0, QDP_all);
-  QDP_M_eq_sM(botnu, bot, QDP_neighbor[nu], QDP_forward, QDP_all);
-  QDP_M_eq_Ma_times_M(sidebot, side, bot, QDP_all);
-  QDP_M_eq_Ma_times_M(sidetop, side, top, QDP_all);
-  QDP_M_eq_Ma_times_M(topnusidebot, topnu, sidebot, QDP_all);
-  QDP_M_eq_sM(fbmu, topnusidebot, QDP_neighbor[mu], QDP_backward, QDP_all);
-  QDP_M_eq_Ma_times_M(botnusidetop, botnu, sidetop, QDP_all);
-  QDP_M_eq_sM(fmbmu, botnusidetop, QDP_neighbor[mu], QDP_backward, QDP_all);
-  QDP_M_eq_M_times_M(sidebotsidemu, sidebot, sidemu, QDP_all);
-  QDP_M_eq_sM(stm, sidebotsidemu, QDP_neighbor[nu], QDP_backward, QDP_all);
-  QDP_M_eq_M_times_Ma(botnusidemu, botnu, sidemu, QDP_all);
-  QDP_discard_M(botnu);
-  QDP_M_peq_M_times_M(stpl, side, botnusidemu, QDP_all);
- //QDP_M_meq_M_times_Ma(force, top, botnusidemu, QDP_all);
-  QDP_M_peq_M_times_Ma(force, top, botnusidemu, QDP_all);
-  QDP_M_eq_M_times_M(botsidemu, bot, sidemu, QDP_all);
-  QDP_discard_M(sidemu);
-  QDP_M_peq_M_times_Ma(force, botsidemu, topnu, QDP_all);
-  QDP_discard_M(topnu);
-  //QDP_M_meq_Ma(force, fbmu, QDP_all);
-  QDP_M_peq_Ma(force, fbmu, QDP_all);
-  QDP_discard_M(fbmu);
-  QDP_M_peq_Ma(force, fmbmu, QDP_all);
-  QDP_discard_M(fmbmu);
-  QDP_M_peq_M(stpl, stm, QDP_all);
-  QDP_discard_M(stm);
-#define SIDE_FORCE_FLOPS (7*198+3*216+3*18)
-
-#undef side
-#undef sidemu
-#undef top
-#undef topnu
-#undef bot
-#undef botnu
-#undef sidebot
-#undef sidetop
-#undef topnusidebot
-#undef fbmu
-#undef botnusidetop
-#undef fmbmu
-#undef sidebotsidemu
-#undef stm
-#undef botnusidemu
-#undef botsidemu
-}
-]#
-
 proc fat7lDeriv*(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
                 llderiv: auto, llgauge: auto, llmid: auto, naik: float,
                 perf: var PerfInfo) =
@@ -133,7 +18,7 @@ proc fat7lDeriv*(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
   let have3 = (coef3!=0.0) or have5
   type lcm = type(gauge[0])
   let lo = gauge[0].l
-  proc newlcm: lcm = result.new(gauge[0].l)
+  proc newlcm: lcm = result.new(lo)
   var
     stpl3: array[4,lcm]
     mid5: array[4,lcm]
@@ -142,8 +27,8 @@ proc fat7lDeriv*(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
     s1a,s1b: array[4,Shifter[lcm,type(gauge[0][0])]]
     tm1,tm2: lcm
     sm1: array[4,Shifter[lcm,type(gauge[0][0])]]
-  if have3:
-    if have5:
+  if have3 or (naik!=0):
+    if have5 or (naik!=0):
       for mu in 0..3:
         stpl3[mu] = newlcm()
         mid5[mu] = newlcm()
@@ -293,7 +178,7 @@ proc fat7lDeriv*(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
     if naik!=0.0:
       for mu in 0..3:
         # force += mid * Umumu' * Umu'
-        # force -= U-mu' * mid-mu * Umu'
+        # force += U-mu' * mid-mu * Umu'
         # force += U-mu' * U-mu-mu' * mid-mu-mu
         #QDP_M_eq_M(Uf, U, QDP_all);
         #QDP_M_eq_sM(Umu, Uf, QDP_neighbor[mu], QDP_forward, QDP_all);
@@ -330,20 +215,21 @@ proc fat7lDeriv*(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
   perf.secs += getElapsedTime()
 
 proc fat7lDeriv*(
-    mid: auto,
     deriv: auto,
+    mid: auto,
     gauge: auto,
     coef: Fat7lCoefs,
-    llderiv: auto,
-    llgauge: auto,
+    lmid: auto,
+    lgauge: auto,
     naik: float,
     perf: var PerfInfo
   ) =
-  var (fx,fxl) = (newOneOf(deriv),newOneOf(llderiv))
-  fat7lderiv(fx,gauge,deriv,coef,fxl,llgauge,llderiv,naik,perf)
+  var (fx,fxl) = (newOneOf(mid),newOneOf(lmid))
+  fat7lderiv(fx,gauge,mid,coef,fxl,lgauge,lmid,naik,perf)
   threads:
-    for mu in 0..<mid.len:
-      for s in mid[mu]: mid[mu][s] := fx[mu][s] + fxl[mu][s]
+    for mu in 0..<deriv.len:
+      for s in deriv[mu]:
+        deriv[mu][s] += fx[mu][s] + fxl[mu][s]
 
 proc fat7lDeriv*(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
                 perf: var PerfInfo) =
@@ -381,7 +267,8 @@ when isMainModule:
   coef.lepage = 0.0
 
   #g.unit
-  g.random r
+  #g.random r
+  g.gaussian r
   #dg.randomTAH r
   dg.gaussian r
   for mu in 0..<g.len:
@@ -409,6 +296,8 @@ when isMainModule:
     gc.gaugeDeriv2(g, fd)
     check(a2-a, 1)
 
+  checkG()
+
   proc checkS(name: string, tol: float) =
     echo "Checking ", name
     for mu in 0..<fd.len:
@@ -427,8 +316,6 @@ when isMainModule:
     fat7lderiv(fd, g, ch, coef, info)
     check(a2-a, tol)
 
-  checkG()
-
   checkS("oneLink", 1)
   coef.oneLink = 0.0
   coef.threeStaple = 1.0
@@ -438,7 +325,7 @@ when isMainModule:
   checkS("fiveStaple", 2)
   coef.fiveStaple = 0.0
   coef.sevenStaple = 1.0
-  checkS("sevenStaple", 3)
+  checkS("sevenStaple", 5)
   coef.sevenStaple = 0.0
   coef.lepage = 1.0
   checkS("Lepage", 25)
@@ -449,27 +336,46 @@ when isMainModule:
   coef.lepage = 0.0
   checkS("not Lepage", 60)
   coef.lepage = 1.0
-  checkS("all", 90)
+  checkS("all fat", 90)
 
+  proc checkL(name: string, tol: float) =
+    echo "Checking ", name
+    for mu in 0..<fd.len:
+      fd[mu] := 0
+      ch[mu] := 0
+      ld[mu] := 0
+    info.clear
+    resetTimers()
+    makeImpLinks(fl, g, coef, ll, g, naik, info)
+    echo "  ", info
+    makeImpLinks(fl2, g2, coef, ll2, g2, naik, info)
+    echo "  ", info
+    let a = gc.gaugeAction2(fl) + gc.gaugeAction2(ll)
+    let a2 = gc.gaugeAction2(fl2) + gc.gaugeAction2(ll2)
+    gc.gaugeDeriv2(fl, ch)
+    gc.gaugeDeriv2(ll, ld)
+    fat7lderiv(fd, ch, g, coef, ld, g, naik, info)
+    #let a = 0.5*ll.norm2
+    #let a2 = 0.5*ll2.norm2
+    #echo a, " ", a2
+    #fat7lderiv(fd, fl, g, coef, ll, g, naik, info)
+    check(a2-a, tol)
 
-#[
-  for mu in 0..<dg.len:
-    fd[mu] := 0
-    ld[mu] := 0
-  makeImpLinks(fl, g, coef, ll, g, naik, info)
-  makeImpLinks(fl2, g2, coef, ll2, g2, naik, info)
-  fat7lderiv(fd, g, dg, coef, ld, g, dg, naik, info)
-  echo info
-  for mu in 0..3:
-    dfl[mu] := fl2[mu] - fl[mu]
-    #echo dfl[mu].norm2
-    #echo fd[mu].norm2
-    dfl[mu] -= fd[mu]
-    echo dfl[mu].norm2
-    dfl[mu] := ll2[mu] - ll[mu]
-    dfl[mu] -= ld[mu]
-    echo dfl[mu].norm2
-]#
+  coef.oneLink = 0.0
+  coef.threeStaple = 0.0
+  coef.fiveStaple = 0.0
+  coef.sevenStaple = 0.0
+  coef.lepage = 0.0
+  naik = 0.5
+  checkL("long link", 1)
+
+  coef.oneLink = 1.0
+  coef.threeStaple = 1.0
+  coef.fiveStaple = 1.0
+  coef.sevenStaple = 1.0
+  coef.lepage = 1.0
+  naik = 100.0
+  checkL("all", 6)
 
   echoProf()
   qexFinalize()
