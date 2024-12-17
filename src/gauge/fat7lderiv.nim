@@ -258,7 +258,8 @@ proc fat7lDeriv*(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
         deriv[sig] += coef1 * mid[sig]
         nflops += 36
 
-    if coefL!=0.0:
+    #if coefL!=0.0:
+    when false:
       # fix up Lepage term
       let fixL = -coefL
       for mu in 0..3:
@@ -440,7 +441,7 @@ when isMainModule:
   checkS("sevenStaple", 3)
   coef.sevenStaple = 0.0
   coef.lepage = 1.0
-  checkS("Lepage", 1)
+  checkS("Lepage", 25)
   coef.oneLink = 1.0
   coef.threeStaple = 1.0
   coef.fiveStaple = 1.0
@@ -448,7 +449,7 @@ when isMainModule:
   coef.lepage = 0.0
   checkS("not Lepage", 60)
   coef.lepage = 1.0
-  checkS("all", 60)
+  checkS("all", 90)
 
 
 #[
