@@ -1450,6 +1450,10 @@ proc norm2*[F:Field](g: openArray[F]): float =
   for i in 0..<g.len:
     result += g[i].norm2
 
+proc norm2subtract*[F:Field](g: openArray[F], bias: float): float =
+  for i in 0..<g.len:
+    result += g[i].norm2subtract(bias)
+
 proc setupLattice*(lat:openarray[int]):auto =
   var
     lat:seq[int] = @lat

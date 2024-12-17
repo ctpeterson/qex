@@ -355,8 +355,10 @@ when isMainModule:
     gc.gaugeDeriv2(fl, ch)
     gc.gaugeDeriv2(ll, ld)
     fat7lderiv(fd, ch, g, coef, ld, g, naik, info)
-    #let a = 0.5*ll.norm2
-    #let a2 = 0.5*ll2.norm2
+    #let bias = fl.norm2 / (fl.len*lo.physVol)
+    #let lbias = ll.norm2 / (ll.len*lo.physVol)
+    #let a = 0.5*(fl.norm2subtract(bias) + ll.norm2subtract(lbias))
+    #let a2 = 0.5*(fl2.norm2subtract(bias) + ll2.norm2subtract(lbias))
     #echo a, " ", a2
     #fat7lderiv(fd, fl, g, coef, ll, g, naik, info)
     check(a2-a, tol)
