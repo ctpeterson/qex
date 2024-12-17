@@ -165,6 +165,7 @@ when isMainModule:
   import qex
   import physics/qcdTypes
   import gauge
+  import strformat
   qexInit()
   #var defaultGaugeFile = "l88.scidac"
   let defaultLat = @[8,8,8,8]
@@ -174,19 +175,50 @@ when isMainModule:
 
   var info: PerfInfo
   var coef: Fat7lCoefs
-  coef.oneLink = 1.0
-  coef.threeStaple = 1.0
-  coef.fiveStaple = 1.0
-  coef.sevenStaple = 1.0
-  coef.lepage = 1.0
   var naik = 1.0
 
   var fl = lo.newGauge()
   var ll = lo.newGauge()
   var g3 = g
 
+  proc checkfat1(name: string) =
+    makeImpLinks(fl, g, coef, info)
+    let p = fl.plaq
+    let c = coef.oneLink + 6*coef.threeStaple + 24*coef.fiveStaple +
+            48*coef.sevenStaple + 6*coef.lepage
+    let s = pow(c,4)/6.0
+    var e2 = 0.0
+    for x in p:
+      e2 += (x-s)^2
+    echo &"{name:12} relerr: {sqrt(e2)/s}"
+
+  coef.oneLink = 1.0
+  checkfat1("oneLink")
+  coef.oneLink = 0.0
+  coef.threeStaple = 1.0
+  checkfat1("threeStaple")
+  coef.threeStaple = 0.0
+  coef.fiveStaple = 1.0
+  checkfat1("fiveStaple")
+  coef.fiveStaple = 0.0
+  coef.sevenStaple = 1.0
+  checkfat1("sevenStaple")
+  coef.sevenStaple = 0.0
+  coef.lepage = 1.0
+  checkfat1("lepage")
+  coef.oneLink = 1.0
+  coef.threeStaple = 1.0
+  coef.fiveStaple = 1.0
+  coef.sevenStaple = 1.0
+  coef.lepage = 1.0
+  checkfat1("all")
+
+  makeImpLinks(fl, g, coef, ll, g3, naik, info)
   echo g.plaq
-  makeImpLinks(fl, g, coef, info)
+  echo fl.plaq
+  echo ll.plaq
+#[
+  echo g.plaq
   makeImpLinks(fl, g, coef, ll, g3, naik, info)
   echo fl.plaq
   echo ll.plaq
@@ -195,5 +227,5 @@ when isMainModule:
   echo pow(1.0+6.0+6.0*4.0,4)/6.0
   echo pow(1.0+6.0+6.0*4.0+6.0*4.0*2.0,4)/6.0
   echo pow(1.0+6.0+6.0*4.0+6.0*4.0*2.0+6.0,4)/6.0
-
+]#
   qexFinalize()
