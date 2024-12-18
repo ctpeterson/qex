@@ -11,8 +11,8 @@ proc newHISQ*(lepage: float = 0.0; naik: float = 1.0): HisqCoefs =
   result.fat7second.setHisqFat7(2.0-lepage,naik)
 
 proc smearGetForce*[T](
-    self: HisqCoefs; 
-    u: T; 
+    self: HisqCoefs;
+    u: T;
     su,sul: T;
     displayPerformance: bool = false
   ): proc(dsdu: var T; dsdsu,dsdsul: T) =
@@ -26,25 +26,25 @@ proc smearGetForce*[T](
     v = newOneOf(u)
     w = newOneOf(u)
     info: PerfInfo
-  
+
   # Smear
   v.makeImpLinks(u,fat7l1,info) # First fat7
   threads: # Unitary projection
-    for mu in 0..<w.len: 
+    for mu in 0..<w.len:
       for s in w[mu]: w[mu][s].projectU(v[mu][s])
   makeImpLinks(su,w,fat7l2,sul,w,naik,info) # Second fat7
 
   # Chain rule - retains a reference to u,su,sul
   proc smearedForce(dsdu: var T; dsdsu,dsdsul: T) =
-    var 
+    var
       dsdx_dxdw = newOneOf(dsdu)
       dsdx_dxdw_dwdv = newOneOf(dsdu)
-    dsdx_dxdw.fat7lderiv(dsdsu,su,fat7l2,dsdsul,sul,naik,info) # Second fat7
+    dsdx_dxdw.fat7lDeriv(su,dsdsu,fat7l2,sul,dsdsul,naik,info) # Second fat7
     threads: # Unitary projection
       for mu in 0..<dsdx_dxdw_dwdv.len:
         for s in dsdx_dxdw_dwdv[mu]:
-          dsdx_dxdw_dwdv[mu][s].projectUderiv(w[mu][s],v[mu][s],dsdx_dxdw[mu][s]) 
-    dsdu.fat7lderiv(dsdx_dxdw_dwdv,u,fat7l1,info) # First fat7
+          dsdx_dxdw_dwdv[mu][s].projectUderiv(w[mu][s],v[mu][s],dsdx_dxdw[mu][s])
+    dsdu.fat7lDeriv(u,dsdx_dxdw_dwdv,fat7l1,info) # First fat7
 
   if displayPerformance: echo $(info)
   return smearedForce
@@ -54,8 +54,8 @@ if isMainModule:
   let
     defaultLat = @[8,8,8,8]
     hisq = newHISQ()
-  defaultSetup()
   var
+    (lo, g, r) = setupLattice(defaultLat)
     sg = lo.newGauge()
     sgl = lo.newGauge()
     f = lo.newGauge()

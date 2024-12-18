@@ -216,16 +216,16 @@ proc fat7lDeriv*(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
 
 proc fat7lDeriv*(
     deriv: auto,
-    mid: auto,
     gauge: auto,
+    mid: auto,
     coef: Fat7lCoefs,
-    lmid: auto,
     lgauge: auto,
+    lmid: auto,
     naik: float,
     perf: var PerfInfo
   ) =
   var (fx,fxl) = (newOneOf(mid),newOneOf(lmid))
-  fat7lderiv(fx,gauge,mid,coef,fxl,lgauge,lmid,naik,perf)
+  fat7lDeriv(fx,gauge,mid,coef,fxl,lgauge,lmid,naik,perf)
   threads:
     for mu in 0..<deriv.len:
       for s in deriv[mu]:
@@ -313,7 +313,7 @@ when isMainModule:
     let a = gc.gaugeAction2(fl)
     let a2 = gc.gaugeAction2(fl2)
     gc.gaugeDeriv2(fl, ch)
-    fat7lderiv(fd, g, ch, coef, info)
+    fat7lDeriv(fd, g, ch, coef, info)
     check(a2-a, tol)
 
   checkS("oneLink", 1)
@@ -354,13 +354,13 @@ when isMainModule:
     let a2 = gc.gaugeAction2(fl2) + gc.gaugeAction2(ll2)
     gc.gaugeDeriv2(fl, ch)
     gc.gaugeDeriv2(ll, ld)
-    fat7lderiv(fd, ch, g, coef, ld, g, naik, info)
+    fat7lDeriv(fd, g, ch, coef, g, ld, naik, info)
     #let bias = fl.norm2 / (fl.len*lo.physVol)
     #let lbias = ll.norm2 / (ll.len*lo.physVol)
     #let a = 0.5*(fl.norm2subtract(bias) + ll.norm2subtract(lbias))
     #let a2 = 0.5*(fl2.norm2subtract(bias) + ll2.norm2subtract(lbias))
     #echo a, " ", a2
-    #fat7lderiv(fd, fl, g, coef, ll, g, naik, info)
+    #fat7lDeriv(fd, g, fl, coef, g, ll, naik, info)
     check(a2-a, tol)
 
   coef.oneLink = 0.0
