@@ -39,7 +39,7 @@ proc smearGetForce*[T](
     var
       dsdx_dxdw = newOneOf(dsdu)
       dsdx_dxdw_dwdv = newOneOf(dsdu)
-    dsdx_dxdw.fat7lDeriv(su,dsdsu,fat7l2,sul,dsdsul,naik,info) # Second fat7
+    dsdx_dxdw.fat7lDeriv(w,dsdsu,fat7l2,w,dsdsul,naik,info) # Second fat7
     threads: # Unitary projection
       for mu in 0..<dsdx_dxdw_dwdv.len:
         for s in dsdx_dxdw_dwdv[mu]:
@@ -49,46 +49,93 @@ proc smearGetForce*[T](
   if displayPerformance: echo $(info)
   return smearedForce
 
-if isMainModule:
+when isMainModule:
+  import gauge/gaugeAction, strformat
   qexInit()
   let
     defaultLat = @[8,8,8,8]
-    hisq = newHISQ()
   var
     (lo, g, r) = setupLattice(defaultLat)
-    sg = lo.newGauge()
-    sgl = lo.newGauge()
-    f = lo.newGauge()
-    ff = lo.newGauge()
-    ffl = lo.newGauge()
-    g2 = lo.newGauge()
-    sg2 = lo.newGauge()
-    sgl2 = lo.newGauge()
     dg = lo.newGauge()
+    g2 = lo.newGauge()
     fd = lo.newGauge()
-  g.random
-  for mu in 0..<dg.len:
-    dg[mu] := 0.00001 * g[mu]
-    g2[mu] := g[mu] + dg[mu]
-    fd[mu] := 0
+    fl = lo.newGauge()
+    ll = lo.newGauge()
+    fl2 = lo.newGauge()
+    ll2 = lo.newGauge()
+    fc = lo.newGauge()
+    lc = lo.newGauge()
+    gc = GaugeActionCoeffs(plaq:1.0)
+    eps = floatParam("eps", 1e-6)
+    #warm = floatParam("warm", 1e-5)
+    hisq = newHISQ()
 
-  echo g.plaq
-  echo g2.plaq
-  #hisq.smear(g,sg,sgl)
-  var force = hisq.smearGetForce(g,sg,sgl)
-  f.force(dg,dg)
-  hisq.smear(g2,sg2,sgl2)
+  #g.unit
+  #g.gaussian r
+  g.random r
+  #g.warm warm, r
+  g.stagPhase
+  dg.gaussian r
+  for mu in 0..<g.len:
+    for e in g[mu]:
+      dg[mu][e] *= eps
+      g2[mu][e] := g[mu][e] + dg[mu][e]
 
-  echo f.plaq
-  echo sg.plaq
-  echo sgl.plaq
-  echo "--"
-  echo sg.plaq
-  echo sgl.plaq
-  ff.gaugeForce(sg)
-  ffl.gaugeForce(sgl)
-  echo "--"
-  echo f.plaq
-  echo sg.plaq
-  echo sgl.plaq
+  proc check(da: float, tol: float) =
+    var ds = 0.0
+    for mu in 0..3:
+      ds += redot(dg[mu], fd[mu])
+    let r = (da-ds)/da
+    echo &"  da {da}  ds {ds}  rel {r}"
+    if abs(r) > tol*eps:
+      echo &"> ERROR rel error |{r}| > {tol*eps}"
+
+  proc checkG =
+    echo "Checking GaugeDeriv"
+    for mu in 0..<fd.len:
+      fd[mu] := 0
+    let a = gc.gaugeAction2(g)
+    let a2 = gc.gaugeAction2(g2)
+    gc.gaugeDeriv2(g, fd)
+    check(a2-a, 10)
+  checkG()
+
+  proc checkL(name: string, tol: float) =
+    echo "Checking ", name
+    for mu in 0..<fd.len:
+      fd[mu] := 0
+      fc[mu] := 0
+      lc[mu] := 0
+    resetTimers()
+    let f = hisq.smearGetForce(g, fl, ll)
+    let f2 = hisq.smearGetForce(g2, fl2, ll2)
+    gc.gaugeDeriv2(fl, fc)
+    gc.gaugeDeriv2(ll, lc)
+    f(fd, fc, lc)
+    let a = gc.gaugeAction2(fl) + gc.gaugeAction2(ll)
+    let a2 = gc.gaugeAction2(fl2) + gc.gaugeAction2(ll2)
+    check(a2-a, tol)
+
+  hisq.fat7first.oneLink = 1.0
+  hisq.fat7first.threeStaple = 0.0
+  hisq.fat7first.fiveStaple = 0.0
+  hisq.fat7first.sevenStaple = 0.0
+  hisq.fat7first.lepage = 0.0
+  hisq.fat7second.oneLink = 1.0
+  hisq.fat7second.threeStaple = 0.0
+  hisq.fat7second.fiveStaple = 0.0
+  hisq.fat7second.sevenStaple = 0.0
+  hisq.fat7second.lepage = 0.0
+  hisq.naik = 0.0
+  checkL("oneLink", 10)
+
+  hisq.fat7first.setHisqFat7(0.0, 0.0)
+  hisq.fat7second.setHisqFat7(0.0, 0.0)
+  hisq.naik = 0.0
+  checkL("all", 300)
+
+  hisq = newHisq()
+  checkL("all", 700)
+
+  echoProf()
   qexFinalize()
