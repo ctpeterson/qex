@@ -1,5 +1,5 @@
 # C.T. Peterson: force test inspired from conversation with Peter Boyle
-# See Grid implementation here: 
+# See Grid implementation here:
 #   -https://github.com/paboyle/Grid/blob/develop/tests/forces/Test_bdy.cc
 import qex
 import gauge/[hisqsmear]
@@ -18,12 +18,12 @@ var
   psi = lo.ColorVector()
   r = lo.newRNGField(RngMilc6,123456789)
   mass = 0.1
-  eps = 0.001
+  eps = floatParam("eps", 1e-4)
   spa = initSolverParams()
   spf = initSolverParams()
   info: PerfInfo
-let
   hisq = newHisq()
+let
   stag = newStag3(sg,sgl)
   arsq = 1e-20
   frsq = 1e-12
@@ -34,15 +34,18 @@ spf.r2req = frsq
 spf.maxits = 10000
 spf.verbosity = 1
 
-# -- Generic 
+# -- Generic
+
+template rephase(g: auto) =
+  g.setBC
+  threadBarrier()
+  g.stagPhase
 
 proc smearRephase(g: auto, sg,sgl: auto): auto {.discardable.} =
   tic()
+  threads: g.rephase
   let smearedForce = hisq.smearGetForce(g,sg,sgl)
-  threads:
-    sg.setBC; sgl.setBC;
-    threadBarrier()
-    sg.stagPhase; sgl.stagPhase;
+  threads: g.rephase
   smearedForce
 
 proc reTrMul(x,y:auto):auto =
@@ -55,7 +58,7 @@ proc reTrMul(x,y:auto):auto =
 
 proc action(): float =
   var s: float
-  stag.solve(psi, phi, -mass, spa)
+  stag.solve(psi, phi, mass, spa)
   threads:
     var st = psi.norm2
     threadMaster: s = st
@@ -66,7 +69,7 @@ proc action(): float =
 proc smearedOneAndThreeLinkForce(f: auto, smearedForce: proc, p: auto, g:auto) =
   # reverse accumulation of the derivative
   # 1. Dslash
-  var 
+  var
     f1 = f.newOneOf()
     f3 = f.newOneOf()
     ff = f.newOneOf()
@@ -76,9 +79,6 @@ proc smearedOneAndThreeLinkForce(f: auto, smearedForce: proc, p: auto, g:auto) =
     discard t[mu] ^* p
     t3[mu] = newShifter(p,mu,3)
     discard t3[mu] ^* p
-    #for i in 0..<4:
-    #  if (i == 0): discard t3[mu] ^* p
-    #  else: discard t3[mu] ^* t3[mu].field
   const n = p[0].len
   threads:
     for mu in 0..<f.len:
@@ -87,19 +87,12 @@ proc smearedOneAndThreeLinkForce(f: auto, smearedForce: proc, p: auto, g:auto) =
           forO b, 0, n-1:
             f1[mu][i][a,b] := p[i][a] * t[mu].field[i][b].adj
             f3[mu][i][a,b] := p[i][a] * t3[mu].field[i][b].adj
-            #f1[mu][i][a,b] := t[mu].field[i][a] * p[i][b].adj
-            #f3[mu][i][a,b] := t3[mu].field[i][a] * p[i][b].adj
 
   # 2. correcting phase
   threads:
-    f1.setBC 
-    f3.setBC
-    threadBarrier()
-    f1.stagPhase 
-    f3.stagPhase
-    threadBarrier()
+    g.rephase
     for mu in 0..<f.len:
-      for i in f[mu].odd: 
+      for i in f[mu].odd:
         f1[mu][i] *= -1
         f3[mu][i] *= -1
 
@@ -114,6 +107,8 @@ proc smearedOneAndThreeLinkForce(f: auto, smearedForce: proc, p: auto, g:auto) =
         #s := g[mu][i]*ff[mu][i]
         s := ff[mu][i] * g[mu][i].adj
         f[mu][i].projectTAH(s)
+    threadBarrier()
+    g.rephase
 
 proc fforce(f: auto) =
   tic()
@@ -124,12 +119,12 @@ proc fforce(f: auto) =
   f.smearedOneAndThreeLinkForce(smearedForce, psi, g)
   toc("fforce olf")
 
-proc mdt() =
+proc mdt(delta: float) =
   tic()
   threads:
     for mu in 0..<g.len:
       for s in g[mu]:
-        g[mu][s] := exp(0.5*eps*p[mu][s])*g[mu][s]
+        g[mu][s] := exp(delta*p[mu][s])*g[mu][s]
 
 proc mdv() =
   let s = -0.5/mass
@@ -140,6 +135,7 @@ proc mdv() =
 # -- Test
 
 var p1: float
+#g.unit
 g.random
 threads:
   p.randomTAH r
@@ -158,8 +154,8 @@ threads:
 let s1 = action()
 echo "ACTION 1: ", s1
 
-# Update (leapfrog)
-mdt(); mdv(); mdt();
+# Update g and calculate force in middle (don't update p)
+mdt(0.5*eps); mdv(); mdt(0.5*eps);
 
 # Calculate final action
 var p2: float
@@ -176,7 +172,7 @@ threads:
 var dS: float
 threads:
   var dSt = 0.0
-  for mu in 0..<p.len: 
+  for mu in 0..<p.len:
     dSt = dSt - reTrMul(p[mu],f[mu])
   threadMaster: dS = dSt
 
