@@ -1,5 +1,5 @@
 # C.T. Peterson: force test inspired from conversation with Peter Boyle
-# See Grid implementation here:
+# See Grid implementation here: 
 #   -https://github.com/paboyle/Grid/blob/develop/tests/forces/Test_bdy.cc
 import qex
 import gauge/[hisqsmear]
@@ -34,7 +34,7 @@ spf.r2req = frsq
 spf.maxits = 10000
 spf.verbosity = 1
 
-# -- Generic
+# -- Generic 
 
 proc smearRephase(g: auto, sg,sgl: auto): auto {.discardable.} =
   tic()
@@ -66,7 +66,7 @@ proc action(): float =
 proc smearedOneAndThreeLinkForce(f: auto, smearedForce: proc, p: auto, g:auto) =
   # reverse accumulation of the derivative
   # 1. Dslash
-  var
+  var 
     f1 = f.newOneOf()
     f3 = f.newOneOf()
     ff = f.newOneOf()
@@ -76,6 +76,9 @@ proc smearedOneAndThreeLinkForce(f: auto, smearedForce: proc, p: auto, g:auto) =
     discard t[mu] ^* p
     t3[mu] = newShifter(p,mu,3)
     discard t3[mu] ^* p
+    #for i in 0..<4:
+    #  if (i == 0): discard t3[mu] ^* p
+    #  else: discard t3[mu] ^* t3[mu].field
   const n = p[0].len
   threads:
     for mu in 0..<f.len:
@@ -84,15 +87,19 @@ proc smearedOneAndThreeLinkForce(f: auto, smearedForce: proc, p: auto, g:auto) =
           forO b, 0, n-1:
             f1[mu][i][a,b] := p[i][a] * t[mu].field[i][b].adj
             f3[mu][i][a,b] := p[i][a] * t3[mu].field[i][b].adj
+            #f1[mu][i][a,b] := t[mu].field[i][a] * p[i][b].adj
+            #f3[mu][i][a,b] := t3[mu].field[i][a] * p[i][b].adj
 
   # 2. correcting phase
   threads:
-    f1.setBC; f3.setBC;
+    f1.setBC 
+    f3.setBC
     threadBarrier()
-    f1.stagPhase; f3.stagPhase;
+    f1.stagPhase 
+    f3.stagPhase
     threadBarrier()
     for mu in 0..<f.len:
-      for i in f[mu].odd:
+      for i in f[mu].odd: 
         f1[mu][i] *= -1
         f3[mu][i] *= -1
 
@@ -104,7 +111,8 @@ proc smearedOneAndThreeLinkForce(f: auto, smearedForce: proc, p: auto, g:auto) =
     for mu in 0..<f.len:
       for i in f[mu]:
         var s {.noinit.}: typeof(f[0][0])
-        s := ff[mu][i]*g[mu][i].adj
+        #s := g[mu][i]*ff[mu][i]
+        s := ff[mu][i] * g[mu][i].adj
         f[mu][i].projectTAH(s)
 
 proc fforce(f: auto) =
@@ -168,7 +176,7 @@ threads:
 var dS: float
 threads:
   var dSt = 0.0
-  for mu in 0..<p.len:
+  for mu in 0..<p.len: 
     dSt = dSt - reTrMul(p[mu],f[mu])
   threadMaster: dS = dSt
 
@@ -176,5 +184,3 @@ threads:
 let dH = s2+p2-s1-p1
 let (dSdt1,dSdt2) = (dS*eps,s2-s1)
 echo "dt*dS/dt, dS, difference = ", dSdt1,", ", dSdt2, ", ", dSdt1-dSdt2
-
-qexFinalize()
