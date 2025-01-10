@@ -10,6 +10,8 @@ import algorithms/[integrator]
 import physics/[qcdTypes,stagSolve]
 
 export integrator
+export mdevolve
+export stagSolve
 
 const banner = """
 |---------------------------------------------------------------|
@@ -116,7 +118,7 @@ template FF(lo: Layout): untyped =
 template FF0(lo: Layout): untyped = 
   type(lo.ColorVector()[0])
 
-proc reunit(g: auto) =
+proc reunit*(g: auto) =
   tic()
   threads:
     let d = g.checkSU
