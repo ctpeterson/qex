@@ -1,6 +1,7 @@
 import qex
 import examples/[hisqhmc_h]
-import sequtils
+import sequtils,parseutils,strutils
+import parseopt,json
 
 const banner = """
 |---------------------------------------------------------------|
@@ -17,15 +18,30 @@ const banner = """
 |---------------------------------------------------------------|
 """
 
+# vvv duplicated code: this should be made available to user in hisqhmc_h
+proc readCMD: JsonNode = 
+  var cmd = initOptParser()
+  result = parseJson("{}")
+  while true:
+    cmd.next()
+    case cmd.kind:
+      of cmdShortOption,cmdLongOption,cmdArgument:
+        try: result[cmd.key] = %* parseInt(cmd.val)
+        except ValueError:
+          try: result[cmd.key] = %* parseFloat(cmd.val)
+          except ValueError: result[cmd.key] = %* cmd.val
+      of cmdEnd: break
+
 qexInit()
 echo banner
 
-let 
+let
+  prompt = readCMD()
   saveFreq = 5
   measPlaq = true
   measPoly = true
   measCond = true
-  baseFilename = "checkpoint"
+  baseFilename = prompt["ensemble"].getStr()
 
 # Proc for calculating plaquette
 proc plaquette[T](u: T) =
