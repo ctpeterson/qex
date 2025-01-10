@@ -119,7 +119,7 @@ side_force(QDP_ColorMatrix *force, QDP_ColorMatrix *bot0, QDP_ColorMatrix *side0
 }
 ]#
 
-proc fat7lDeriv(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
+proc fat7lDeriv*(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
                 llderiv: auto, llgauge: auto, llmid: auto, naik: float,
                 perf: var PerfInfo) =
   tic("fat7lDeriv")
@@ -258,7 +258,8 @@ proc fat7lDeriv(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
         deriv[sig] += coef1 * mid[sig]
         nflops += 36
 
-    if coefL!=0.0:
+    #if coefL!=0.0:
+    when false:
       # fix up Lepage term
       let fixL = -coefL
       for mu in 0..3:
@@ -328,7 +329,7 @@ proc fat7lDeriv(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
   perf.flops += nflops * gauge[0].l.localGeom.prod
   perf.secs += getElapsedTime()
 
-proc fat7lDeriv(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
+proc fat7lDeriv*(deriv: auto, gauge: auto, mid: auto, coef: Fat7lCoefs,
                 perf: var PerfInfo) =
   fat7lDeriv(deriv, gauge, mid, coef, deriv, gauge, mid, 0.0, perf)
 
@@ -339,16 +340,98 @@ when isMainModule:
   qexInit()
   #var defaultGaugeFile = "l88.scidac"
   let defaultLat = @[8,8,8,8]
-  defaultSetup()
-  for mu in 0..<g.len: g[mu] := 1
-  #g.random
+  #defaultSetup()
 
-  var info: PerfInfo
-  var coef: Fat7lCoefs
+  var
+    (lo, g, r) = setupLattice(defaultLat)
+    fl = lo.newGauge()
+    fl2 = lo.newGauge()
+    ll = lo.newGauge()
+    ll2 = lo.newGauge()
+    ch = lo.newGauge()
+    g2 = lo.newGauge()
+    dg = lo.newGauge()
+    fd = lo.newGauge()
+    ld = lo.newGauge()
+    gc = GaugeActionCoeffs(plaq:1.0)
+    info: PerfInfo
+    coef: Fat7lCoefs
+    naik = 1.0
+    eps = floatParam("eps", 1e-5)
+  coef.oneLink = 1.0
+  coef.threeStaple = 0.0
+  coef.fiveStaple = 0.0
+  coef.sevenStaple = 0.0
+  coef.lepage = 0.0
+
+  #g.unit
+  g.random r
+  #dg.randomTAH r
+  dg.gaussian r
+  for mu in 0..<g.len:
+    for e in g[mu]:
+      dg[mu][e] *= eps
+      #g2[mu][e] := exp(dg[mu][e]) * g[mu][e]
+      g2[mu][e] := g[mu][e] + dg[mu][e]
+
+  proc check(da: float, tol: float) =
+    var ds = 0.0
+    for mu in 0..3:
+      ds += redot(dg[mu], fd[mu])
+    let r = (da-ds)/da
+    #echo "Checking ", name
+    echo &"  da {da}  ds {ds}  rel {r}"
+    if abs(r) > tol*eps:
+      echo &"> ERROR rel error |{r}| > {tol*eps}"
+
+  proc checkG =
+    echo "Checking GaugeForce"
+    for mu in 0..<fd.len:
+      fd[mu] := 0
+    let a = gc.gaugeAction2(g)
+    let a2 = gc.gaugeAction2(g2)
+    gc.gaugeDeriv2(g, fd)
+    check(a2-a, 1)
+
+  proc checkS(name: string, tol: float) =
+    echo "Checking ", name
+    for mu in 0..<fd.len:
+      ch[mu] := 0
+      fd[mu] := 0
+    makeImpLinks(fl, g, coef, info)
+    info.clear
+    resetTimers()
+    makeImpLinks(fl, g, coef, info)
+    echo "  ", info
+    makeImpLinks(fl2, g2, coef, info)
+    echo "  ", info
+    let a = gc.gaugeAction2(fl)
+    let a2 = gc.gaugeAction2(fl2)
+    gc.gaugeDeriv2(fl, ch)
+    fat7lderiv(fd, g, ch, coef, info)
+    check(a2-a, tol)
+
+  checkG()
+
+  checkS("oneLink", 1)
+  coef.oneLink = 0.0
+  coef.threeStaple = 1.0
+  checkS("threeStaple", 2)
+  coef.threeStaple = 0.0
+  coef.fiveStaple = 1.0
+  checkS("fiveStaple", 2)
+  coef.fiveStaple = 0.0
+  coef.sevenStaple = 1.0
+  checkS("sevenStaple", 3)
+  coef.sevenStaple = 0.0
+  coef.lepage = 1.0
+  checkS("Lepage", 25)
   coef.oneLink = 1.0
   coef.threeStaple = 1.0
   coef.fiveStaple = 1.0
   coef.sevenStaple = 1.0
+  coef.lepage = 0.0
+  checkS("not Lepage", 60)
   coef.lepage = 1.0
   var naik = 1.0
 
