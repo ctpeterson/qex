@@ -37,7 +37,7 @@ echo banner
 
 let
   prompt = readCMD()
-  saveFreq = 5
+  saveFreq = 10
   measPlaq = true
   measPoly = true
   measCond = true
@@ -104,8 +104,9 @@ var hmc = newHisqHMC:
   if start == "read":
     let fn = baseFilename & "_" & $(hisq.traj0)
     hisq.readGauge(fn & ".lat")
-    hisq.readSerialRNG(fn & ".serialRNG")
-    hisq.readSerialRNG(fn & ".parallelRNG")
+    if hisq.traj0 > 0:
+      hisq.readSerialRNG(fn & ".serialRNG")
+      hisq.readSerialRNG(fn & ".parallelRNG")
     u.plaquette
     u.polyakov
     u.reunit
