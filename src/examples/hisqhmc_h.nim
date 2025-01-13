@@ -773,7 +773,7 @@ if isMainModule:
       let fn = baseFilename & "_" & $(hisq.traj0)
       hisq.readGauge(fn & ".lat")
       hisq.readSerialRNG(fn & ".serialRNG")
-      hisq.readSerialRNG(fn & ".parallelRNG")
+      hisq.readParallelRNG(fn & ".parallelRNG")
       u.plaquette
       u.polyakov
       u.reunit
