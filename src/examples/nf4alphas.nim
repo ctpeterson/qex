@@ -106,7 +106,7 @@ var hmc = newHisqHMC:
     hisq.readGauge(fn & ".lat")
     if hisq.traj0 > 0:
       hisq.readSerialRNG(fn & ".serialRNG")
-      hisq.readSerialRNG(fn & ".parallelRNG")
+      hisq.readParallelRNG(fn & ".parallelRNG")
     u.plaquette
     u.polyakov
     u.reunit
