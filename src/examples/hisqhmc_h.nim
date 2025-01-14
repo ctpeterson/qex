@@ -166,7 +166,7 @@ proc newSerialRNG*(generator: string; seed: int): SerialRng =
 
 proc readJSON(fn: string): JsonNode = fn.parseFile
 
-proc readCMD: JsonNode = 
+proc readCMD*: JsonNode = 
   var cmd = initOptParser()
   result = parseJson("{}")
   while true:
@@ -446,7 +446,7 @@ proc fermionAction*(self: HisqHMC): float =
     hpsit = self.u[0].l.ColorVector()
     hpsi = self.u[0].l.ColorVector()
     fact: float
-  threads: self.stag.D(hpsit,self.hphi,-self.hmass)
+  threads: self.stag.D(hpsit,self.hphi,self.hmass)
   self.stag.solve(psi,self.phi,-self.hmass,self.spa)
   self.stag.solve(hpsi,hpsit,-self.mass,self.spa)
   threads:
@@ -481,7 +481,7 @@ proc pseudofermion(
   threads:
     stag.D(phi,psi,-hmass)
     stag.D(hphit,hpsi,-mass)
-  stag.solve(hphi,hphit,-hmass,spa)
+  stag.solve(hphi,hphit,hmass,spa)
   threads:
     phi.odd := 0
     hphi.odd := 0
@@ -494,9 +494,11 @@ proc fermionHeatbath*(self: var HisqHMC) =
   self.prng.randomComplexGaussian(psi)
   self.prng.randomComplexGaussian(hpsi)
   self.stag.pseudofermion(
-    self.phi,self.hphi,
+    self.phi,
+    self.hphi,
     psi,hpsi,
-    self.mass,self.hmass,
+    self.mass,
+    self.hmass,
     self.spa
   )
 
