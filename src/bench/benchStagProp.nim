@@ -25,14 +25,16 @@ var warm = floatParam("warm", warm0)
 threads:
   #g.random rs
   g.warm warm, rs
+  threadBarrier()
   g.setBC
+  threadBarrier()
   g.stagPhase
   v1 := 0
   #for e in v1:
   #  template x(d:int):untyped = lo.vcoords(d,e)
   #  v1[e][0].re := foldl(x, 4, a*10+b)
   #  #echo v1[e][0]
-#echo v1.norm2
+echo "g.norm2: ", g.norm2
 if myRank==0:
   v1{0}[0] := 1
   #v1{2*1024}[0] := 1
