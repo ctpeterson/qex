@@ -1,13 +1,16 @@
 # A bit of a lazy Hasenbusch "upgrade" to hisqhmc.nim
 import qex
-import mdevolve
-import times,macros,json,parseopt,sequtils
-import strformat,strutils,streams,os
+import base
 import gauge
 import layout
 import gauge/[hisqsmear]
 import algorithms/[integrator]
 import physics/[qcdTypes,stagSolve]
+
+import mdevolve
+
+import times,macros,json,parseopt,sequtils
+import strformat,strutils,streams,os
 
 export integrator
 export mdevolve
@@ -39,6 +42,7 @@ const
   ForceMaxCGIter* = 10000
   ActionCGVerbosity* = 1
   ForceCGVerbosity* = 1
+  SmearingVerbosity* = 1
 
 # Eqn. (A2) of arXiv:1004.0342; u0 = 1.0
 const
@@ -420,10 +424,15 @@ template rephase(g: auto) =
   g.stagPhase
 
 proc smearRephase(hisq: HisqCoefs; g: auto; sg,sgl: auto): auto {.discardable.} =
+  let 
+    displayPerformance = case SmearingVerbosity
+      of 0: false
+      of 1: true
+      else: true
   threads: g.rephase
-  let smearedForce = hisq.smearGetForce(g,sg,sgl)
+  let sf = hisq.smearGetForce(g,sg,sgl,displayPerformance=displayPerformance)
   threads: g.rephase
-  smearedForce
+  result = sf
 
 proc smear*(self: var HisqHMC) = 
   discard self.params.smearRephase(self.u,self.su,self.sul)
@@ -431,14 +440,16 @@ proc smear*(self: var HisqHMC) =
 proc smearGetForce*(self: var HisqHMC): auto =
   result = self.params.smearRephase(self.u,self.su,self.sul)
 
-proc kineticAction*[T](p: T): float =
+proc pnorm2[T](p: T): float =
   var p2: float
   threads:
     var p2t = 0.0
     for mu in 0..<p.len: p2t += p[mu].norm2
     threadBarrier()
     threadMaster: p2 = p2t
-  result = 0.5*p2 - 16.0*float(p[0].l.physVol)
+  result = p2
+
+proc kineticAction*[T](p: T): float = 0.5*p.pnorm2 - 16.0*float(p[0].l.physVol)
 
 proc fermionAction*(self: HisqHMC): float =
   var 
@@ -493,14 +504,7 @@ proc fermionHeatbath*(self: var HisqHMC) =
     hpsi = self.u[0].l.ColorVector() 
   self.prng.randomComplexGaussian(hpsi)
   self.prng.randomComplexGaussian(psi)
-  self.stag.pseudofermion(
-    self.phi,
-    self.hphi,
-    psi,hpsi,
-    self.mass,
-    self.hmass,
-    self.spa
-  )
+  self.stag.pseudofermion(self.phi,self.hphi,psi,hpsi,self.mass,self.hmass,self.spa)
 
 proc prepare*(self: var HisqHMC) =
   self.backup()
@@ -519,20 +523,6 @@ proc revert(self: var HisqHMC) = set(self.u,self.u0)
 proc evolve*(self: var HisqHMC) = 
   self.integrator.evolve(self.tau)
   self.integrator.finish
-
-# Temporary fix to conflict between parallel layout & multiple shifts
-proc `^***`[T](shifter: auto; field: T): auto {.discardable.} = 
-  const n = field[0].len
-  var temp = field.newOneOf
-
-  proc replace() =
-    threads:
-      for s in field:
-        forO i, 0, n-1: temp[s][i] := shifter.field[s][i]
-
-  discard shifter ^* field
-  replace(); discard shifter ^* temp;
-  replace(); shifter ^* temp;
 
 proc fermionForce[S,T](
     f: auto; 
@@ -562,10 +552,6 @@ proc fermionForce[S,T](
     ht3[mu] = newShifter(hp,mu,3)
     discard t3[mu] ^* p
     discard ht3[mu] ^* hp
-    #t3[mu] = newShifter(p,mu,1)
-    #ht3[mu] = newShifter(hp,mu,1)
-    #discard t3[mu] ^*** p
-    #discard ht3[mu] ^*** hp
 
   # 1. Dslash
   const n = p[0].len
@@ -603,32 +589,65 @@ proc fermionForce[S,T](
     threadBarrier()
     g.rephase
 
-proc sq(input: float): float = input*input
+proc sq(x: float): float = x*x
 
 proc forceSolve[T](
     stag: auto; 
     psi: auto; 
     phi: T; 
     mass: float; 
-    sp: var SolverParams
+    sp0: var SolverParams
   ) =
-  var varphi = phi.l.ColorVector()
+  tic()
+  var
+    varphi = newOneOf(psi)
+    r = newOneOf(phi)
+    r2,b2: float
+    sp = sp0
+
+  # Prepare solver parameters
+  sp.resetStats()
+  dec sp.verbosity
+  sp.usePrevSoln = false
+  threads:
+    let b2t = phi.norm2
+    threadBarrier()
+    threadMaster: b2 = b2t
+
+  # Get solution
   stag.solveEE(varphi,phi,mass,sp)
   threads:
+    # Get residual
+    var r2t: float
+    stag.D(r,varphi,mass)
+    threadBarrier()
+    r2t = r.norm2
+    threadBarrier()
+    threadMaster: r2 = r2t
+
+    # Get solution for force
     varphi.even := 4.0*varphi
     threadBarrier()
     stagD2(stag.so,psi,stag.g,varphi,0,0)
     threadBarrier()
     psi.even := varphi
 
-proc fermionForce*(self: var HisqHMC) =
+  # Get information about solve
+  sp.r2.init r2/b2
+  sp.calls = 1
+  sp.seconds = getElapsedTime()
+  sp.flops += float((stag.g.len*4*72+24)*psi.l.nEven) # ???
+  if sp0.verbosity>0: echo "stagSolve: ", sp.getStats
+  sp0.addStats(sp)
+
+proc fermionForce*(self: var HisqHMC; dtau: float) =
   var 
     psi = self.u[0].l.ColorVector()
     hpsi = self.u[0].l.ColorVector()
   let 
     smearedForce = self.params.smearRephase(self.u,self.su,self.sul)
-    ffac = 0.25
-    hfac = 0.25*(self.hmass.sq-self.mass.sq)
+    ffac = 0.25*dtau
+    hfac = ffac*(self.hmass.sq-self.mass.sq)
   self.stag.forceSolve(psi,self.phi,self.hmass,self.spf)
   self.stag.forceSolve(hpsi,self.hphi,self.mass,self.spf)
   self.f.fermionForce(smearedForce,psi,hpsi,self.u,ffac,hfac)
@@ -649,12 +668,20 @@ proc updateMomentum[T](p: auto; f: T; dtau: float) =
     for mu in 0..<f.len: p[mu] -= dtau*f[mu]
   GC_fullCollect()
 
+proc updateMomentum[T](p: auto; f: T) =
+  threads:
+    for mu in 0..<f.len: p[mu] -= f[mu]
+  GC_fullCollect()
+
 proc updateMomentum*(self: var HisqHMC; dtau: float) =
   self.p.updateMomentum(self.f,dtau)
 
+proc updateMomentum*(self: var HisqHMC) =
+  self.p.updateMomentum(self.f)
+
 proc updateMomentumFermion*(self: var HisqHMC; dtau: float) =
-  self.fermionForce()
-  self.updateMomentum(dtau)
+  self.fermionForce(dtau)
+  self.updateMomentum()
 
 proc updateMomentumGauge*(self: var HisqHMC; dtau: float) =
   self.gaugeForce()

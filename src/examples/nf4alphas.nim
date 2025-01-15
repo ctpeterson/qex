@@ -78,7 +78,7 @@ proc condensate(hmc: auto) =
   hmc.stag.solve(tmpb,tmpa,mass,pbpsp)
   threads:
     let pbp = tmpb.norm2
-    threadMaster: echo "MEASpbp mass ",mass," : ",mass*pbp/vol
+    threadMaster: echo "MEASpbp mass: ",mass," pbp: ",mass*pbp/vol
 
 # Construct HMC object
 var hmc = newHisqHMC:
