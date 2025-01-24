@@ -18,20 +18,6 @@ const banner = """
 |---------------------------------------------------------------|
 """
 
-# vvv duplicated code: this should be made available to user in hisqhmc_h
-proc readCMD: JsonNode = 
-  var cmd = initOptParser()
-  result = parseJson("{}")
-  while true:
-    cmd.next()
-    case cmd.kind:
-      of cmdShortOption,cmdLongOption,cmdArgument:
-        try: result[cmd.key] = %* parseInt(cmd.val)
-        except ValueError:
-          try: result[cmd.key] = %* parseFloat(cmd.val)
-          except ValueError: result[cmd.key] = %* cmd.val
-      of cmdEnd: break
-
 qexInit()
 echo banner
 
@@ -74,10 +60,10 @@ proc condensate(hmc: auto) =
     vol = hmc.stag.g[0].l.physVol.float
   pbpsp.r2req = ActionCGTol
   pbpsp.maxits = ActionMaxCGIter
-  threads: tmpa.u1(hmc.prng.milc)
+  threads: tmpa.gaussian(hmc.prng.milc)
   hmc.stag.solve(tmpb,tmpa,mass,pbpsp)
   threads:
-    let pbp = tmpb.norm2
+    let pbp = 0.5*tmpb.norm2
     threadMaster: echo "MEASpbp mass: ",mass," pbp: ",mass*pbp/vol
 
 # Construct HMC object
