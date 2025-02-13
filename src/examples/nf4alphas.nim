@@ -55,16 +55,25 @@ proc condensate(hmc: auto) =
     pbpsp: SolverParams
     tmpa = hmc.stag.g[0].l.ColorVector()
     tmpb = hmc.stag.g[0].l.ColorVector()
+    pbptote = 0.0
+    pbptoto = 0.0
   let 
     mass = hmc.mass
     vol = hmc.stag.g[0].l.physVol.float
+    nsources = hmc.jsonInfo["measurements"]["chiral-condensate"]["sources"].getInt()
   pbpsp.r2req = ActionCGTol
   pbpsp.maxits = ActionMaxCGIter
-  threads: tmpa.gaussian(hmc.prng.milc)
-  hmc.stag.solve(tmpb,tmpa,mass,pbpsp)
-  threads:
-    let pbp = 0.5*tmpb.norm2
-    threadMaster: echo "MEASpbp mass: ",mass," pbp: ",mass*pbp/vol
+  for source in 0..<nsources:
+    threads: tmpa.gaussian(hmc.prng.milc)
+    hmc.stag.solve(tmpb,tmpa,mass,pbpsp)
+    threads:
+      let 
+        pbpe = 0.5*mass*tmpb.even.norm2/vol
+        pbpo = 0.5*mass*tmpb.odd.norm2/vol
+      threadMaster: echo "MEASpbp (",source,") mass: ",mass," pbpe: ",pbpe," pbpo: ",pbpo
+      pbptote += pbpe/float(nsources)
+      pbptoto += pbpo/float(nsources)
+  echo "MEASpbp (avg) mass: ",mass," pbpe: ",pbptote," pbpo: ",pbptoto
 
 # Construct HMC object
 var hmc = newHisqHMC:
@@ -103,13 +112,14 @@ hmc.sample:
   hmc.prepare()
   hmc.evolve()
   hmc.finish:
-    let output = $(info.dH) & ", " & $(info.expdH) & ", " & $(info.rnd)
+    let output = $(info.dH) & " exp(dH): " & $(info.expdH) & " rand: " & $(info.rnd)
     case accepted:
       of true: echo "ACC: ", output
       of false: echo "REJ: ", output
-    if measPlaq: u.plaquette
-    if measPoly: u.polyakov
-    if measCond: hmc.condensate
+    if hmc.jsonInfo.hasKey("measurements"):
+      if hmc.jsonInfo["measurements"].hasKey("plaquette"): u.plaquette
+      if hmc.jsonInfo["measurements"].hasKey("polyakov"): u.polyakov
+      if hmc.jsonInfo["measurements"].hasKey("chiral-condensate"): hmc.condensate
     if (saveFreq > 0) and (((trajectory + 1) mod saveFreq) == 0):
       let fn = baseFilename & "_" & $(trajectory + 1)
       hmc.writeGauge(fn & ".lat")

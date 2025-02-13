@@ -54,7 +54,7 @@ let
   defaultInputs = %* {
     "lattice-geometry": [8,8,8,16],
     "hmc": {
-      "trajectory-length": 1.0,
+      "trajectory-length": 0.1,
       "serial-rng": "milc",
       "parallel-rng": "milc",
       "serial-seed": 123456789,
@@ -62,20 +62,20 @@ let
       "gauge-start": "cold"
     },
     "action": {
-      "beta": 12.0,
-      "mass": 0.001,
-      "hasenbusch-mass": 0.2,
+      "beta": 7.5,
+      "mass": 0.005,
+      "hasenbusch-mass": 0.6,
       "lepage": 0.0,
       "naik": 1.0,
       "boundary-conditions": "pppa"
     },
     "gauge": {
       "integrator": "2MN",
-      "steps": 6
+      "steps": 10
     },
     "fermion": {
       "integrator": "2MN",
-      "steps": 2
+      "steps": 10
     }
   }
 
@@ -114,6 +114,7 @@ type
     params: HisqCoefs
     spa,spf: SolverParams
     perf: PerfInfo
+    jsonInfo: JsonNode
 
 template UU(lo: Layout): untyped = 
   type(lo.ColorMatrix())
@@ -224,6 +225,7 @@ proc readGauge(u: auto; fn: string) =
   if fileExists(fn):
     if 0 != u.loadGauge(fn): qexError "unable to read " & fn
     else: discard
+  else: qexError fn & " does not exist"
 
 proc readGauge*(self: var HisqHMC; fn: string) = self.u.readGauge(fn)
 
@@ -346,6 +348,7 @@ template newHisqHMC*(build: untyped): auto =
   template u: untyped {.inject.} = hisq.u
   build
   hisq.integrator = integrator
+  hisq.jsonInfo = info
   hisq
 
 #[ Everything else... ]#
@@ -474,10 +477,7 @@ proc hamiltonian(self: HisqHMC): float =
       fermion: self.fermionAction()
     )
   var prnt = ""
-  for tag,val in h.fieldPairs: 
-    prnt = case tag
-      of "fermion": prnt & tag & " = " & $(val)
-      else: prnt & tag & " = " & $(val) & ", "
+  for tag,val in h.fieldPairs: prnt = prnt & tag & ": " & $(val) & " "
   echo prnt
   result = h.kinetic + h.gauge + h.fermion
 
