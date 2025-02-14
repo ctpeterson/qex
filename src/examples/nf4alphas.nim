@@ -19,14 +19,13 @@ const banner = """
 """
 
 qexInit()
+
 echo banner
+echo "rank ", myRank, "/", nRanks
+threads: echo "thread ", threadNum, "/", numThreads
 
 let
   prompt = readCMD()
-  saveFreq = 10
-  measPlaq = true
-  measPoly = true
-  measCond = true
   baseFilename = prompt["ensemble"].getStr()
 
 # Proc for calculating plaquette
@@ -120,10 +119,12 @@ hmc.sample:
       if hmc.jsonInfo["measurements"].hasKey("plaquette"): u.plaquette
       if hmc.jsonInfo["measurements"].hasKey("polyakov"): u.polyakov
       if hmc.jsonInfo["measurements"].hasKey("chiral-condensate"): hmc.condensate
-    if (saveFreq > 0) and (((trajectory + 1) mod saveFreq) == 0):
-      let fn = baseFilename & "_" & $(trajectory + 1)
-      hmc.writeGauge(fn & ".lat")
-      hmc.writeSerialRNG(fn & ".serialRNG")
-      hmc.writeParallelRNG(fn & ".parallelRNG")
+    if hmc.jsonInfo.hasKey("checkpoint"):
+      let saveFreq = hmc.jsonInfo["checkpoint"]["frequency"].getInt()
+      if (saveFreq > 0) and (((trajectory + 1) mod saveFreq) == 0):
+        let fn = baseFilename & "_" & $(trajectory + 1)
+        hmc.writeGauge(fn & ".lat")
+        hmc.writeSerialRNG(fn & ".serialRNG")
+        hmc.writeParallelRNG(fn & ".parallelRNG")
 
 qexFinalize()
